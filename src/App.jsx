@@ -12,12 +12,12 @@ import {
   setDoc, 
   onSnapshot, 
   updateDoc, 
-  arrayUnion,
-  arrayRemove
+  arrayUnion
 } from 'firebase/firestore';
 import { Crosshair, Shield, Play, Skull, RotateCcw } from 'lucide-react';
 
 // --- CONFIGURATIE ---
+// LET OP: Zorg dat FIREBASE_CONFIG goed wordt afgesloten met };
 const FIREBASE_CONFIG = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
   apiKey: "AIzaSyDw-WSx1oYTHzadXUB7csmKNhZlO0RTw6Y",
   authDomain: "multiplayer-shooter-c0b9f.firebaseapp.com",
@@ -25,9 +25,11 @@ const FIREBASE_CONFIG = typeof __firebase_config !== 'undefined' ? JSON.parse(__
   storageBucket: "multiplayer-shooter-c0b9f.firebasestorage.app",
   messagingSenderId: "773037810608",
   appId: "1:773037810608:web:f8b22fc68fa1e0c34f2c75"
+}; // <--- Dit is de "}" die waarschijnlijk miste in jouw bestand!
 
 const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'mijn-shooter-game';
 
+// Initialiseer Firebase
 const app = initializeApp(FIREBASE_CONFIG);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -83,7 +85,7 @@ export default function App() {
         } else {
           await signInAnonymously(auth);
         }
-      } catch (err) { console.error(err); }
+      } catch (err) { console.error("Auth error:", err); }
     };
     initAuth();
     const unsubscribe = onAuthStateChanged(auth, setUser);
@@ -102,19 +104,17 @@ export default function App() {
           localPos.current = { x: Math.random() * 600 + 100, y: Math.random() * 400 + 100 };
           requestAnimationFrame(gameLoop);
         }
-        // Check of ik zelf nog leef volgens de DB
         if (gameState === 'PLAYING' && data.players?.[user.uid]?.alive === false) {
           setGameState('DEAD');
         }
       }
-    });
+    }, (err) => console.error("Firestore error:", err));
     return () => unsub();
   }, [user, lobbyCode, gameState]);
 
   const gameLoop = () => {
     if (gameState !== 'PLAYING') return;
     
-    // Beweging
     const dx = mousePos.current.x - localPos.current.x;
     const dy = mousePos.current.y - localPos.current.y;
     const distance = Math.sqrt(dx * dx + dy * dy);
@@ -135,20 +135,16 @@ export default function App() {
       if (!hitsObstacle) localPos.current = { x: nextX, y: nextY };
     }
 
-    // Schieten
     if (keysPressed.current[' '] && Date.now() - lastShotTime.current > RELOAD_TIME) {
       fireBullet();
     }
 
-    // Hit detection (worden we geraakt?)
     if (lobbyData?.bullets) {
         lobbyData.bullets.forEach(bullet => {
             if (bullet.ownerId !== user.uid) {
-                // Bereken huidige kogel positie
                 const age = (Date.now() - bullet.createdAt) / 1000;
                 const bx = bullet.x + (bullet.vx * age * 60);
                 const by = bullet.y + (bullet.vy * age * 60);
-                
                 const dist = Math.sqrt(Math.pow(bx - localPos.current.x, 2) + Math.pow(by - localPos.current.y, 2));
                 if (dist < (PLAYER_SIZE / 2 + BULLET_SIZE / 2)) {
                     handleDeath();
@@ -162,11 +158,11 @@ export default function App() {
       syncPlayer();
       lastUpdateToDb.current = now;
     }
-
     gameLoopRef.current = requestAnimationFrame(gameLoop);
   };
 
   const handleDeath = async () => {
+    if (gameState !== 'PLAYING') return;
     setGameState('DEAD');
     const lobbyRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'lobbies', lobbyCode);
     await updateDoc(lobbyRef, { [`players.${user.uid}.alive`]: false });
@@ -234,7 +230,6 @@ export default function App() {
 
   const startSpel = async () => {
     const lobbyRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'lobbies', lobbyCode);
-    // Reset alle spelers naar alive
     const newPlayers = { ...lobbyData.players };
     Object.keys(newPlayers).forEach(id => newPlayers[id].alive = true);
     await updateDoc(lobbyRef, { status: 'PLAYING', bullets: [], players: newPlayers });
@@ -246,9 +241,10 @@ export default function App() {
         <div className="bg-slate-800 p-8 rounded-3xl shadow-2xl w-full max-w-md border border-slate-700">
           <h1 className="text-5xl font-black text-center mb-8 text-emerald-400 italic">BOOM.IO</h1>
           <div className="space-y-4">
-            <input className="w-full bg-slate-700 p-4 rounded-xl border border-slate-600 outline-none focus:border-emerald-500 transition-all" placeholder="Naam" value={playerName} onChange={e => setPlayerName(e.target.value)} />
+            {error && <p className="text-rose-400 text-center text-sm font-bold">{error}</p>}
+            <input className="w-full bg-slate-700 p-4 rounded-xl border border-slate-600 outline-none focus:border-emerald-500" placeholder="Naam" value={playerName} onChange={e => setPlayerName(e.target.value)} />
             <input className="w-full bg-slate-700 p-4 rounded-xl border border-slate-600 outline-none focus:border-emerald-500 uppercase font-mono" placeholder="Lobby Code" value={lobbyCode} onChange={e => setLobbyCode(e.target.value)} />
-            <button onClick={joinLobby} className="w-full bg-emerald-500 py-4 rounded-xl font-bold text-xl hover:bg-emerald-400 active:scale-95 transition-all shadow-lg shadow-emerald-900/20">SPEEL NU</button>
+            <button onClick={joinLobby} className="w-full bg-emerald-500 py-4 rounded-xl font-bold text-xl hover:bg-emerald-400 active:scale-95 transition-all">SPEEL NU</button>
           </div>
         </div>
       </div>
@@ -260,7 +256,7 @@ export default function App() {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-white">
         <div className="bg-slate-800 p-8 rounded-3xl shadow-xl w-full max-w-md border border-slate-700 text-center">
-          <h2 className="text-2xl font-bold mb-6 italic underline decoration-emerald-500">LOBBY: {lobbyCode}</h2>
+          <h2 className="text-2xl font-bold mb-6">LOBBY: {lobbyCode}</h2>
           <div className="space-y-3 mb-8">
             {spelers.map((p, i) => (
               <div key={i} className="bg-slate-700/50 p-4 rounded-xl flex items-center justify-between border border-slate-600">
@@ -280,18 +276,17 @@ export default function App() {
   return (
     <div className="w-full h-screen bg-slate-950 flex items-center justify-center overflow-hidden cursor-crosshair">
       <div id="game-area" className="relative bg-slate-900 border-8 border-slate-800 shadow-2xl" style={{ width: MAP_WIDTH, height: MAP_HEIGHT }}>
-        {/* Raster effect */}
         <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'linear-gradient(#475569 1px, transparent 1px), linear-gradient(90deg, #475569 1px, transparent 1px)', backgroundSize: '50px 50px' }} />
 
         {OBSTACLES.map((o, i) => (
-          <div key={i} className="absolute bg-slate-700 border-2 border-slate-600 rounded-sm shadow-lg" style={{ left: o.x, top: o.y, width: o.w, height: o.h }} />
+          <div key={i} className="absolute bg-slate-700 border-2 border-slate-600 rounded-sm" style={{ left: o.x, top: o.y, width: o.w, height: o.h }} />
         ))}
 
         {lobbyData?.players && Object.entries(lobbyData.players).map(([id, p]) => {
           if (!p.alive) return null;
           const isMe = id === user?.uid;
-          const x = isMe ? localPos.current.x : p.x;
-          const y = isMe ? localPos.current.y : p.y;
+          const x = isMe ? localPos.current.x : (p.x || 0);
+          const y = isMe ? localPos.current.y : (p.y || 0);
           const reloadProgress = Math.min(100, ((Date.now() - lastShotTime.current) / RELOAD_TIME) * 100);
 
           return (
@@ -315,7 +310,6 @@ export default function App() {
           const curX = b.x + (b.vx * age * 60);
           const curY = b.y + (b.vy * age * 60);
           
-          // Check of kogel een obstakel raakt (voor visuele opschoning)
           let hitObs = false;
           for(let o of OBSTACLES) {
               if (curX > o.x && curX < o.x + o.w && curY > o.y && curY < o.y + o.h) hitObs = true;
@@ -331,11 +325,10 @@ export default function App() {
 
       {gameState === 'DEAD' && (
         <div className="absolute inset-0 bg-slate-900/90 backdrop-blur-md flex items-center justify-center z-50">
-          <div className="text-center p-12 bg-slate-800 rounded-[3rem] border-4 border-rose-500 shadow-2xl animate-in zoom-in duration-300">
+          <div className="text-center p-12 bg-slate-800 rounded-[3rem] border-4 border-rose-500 shadow-2xl">
             <Skull size={80} className="text-rose-500 mx-auto mb-6 animate-bounce" />
             <h2 className="text-5xl font-black mb-2 text-white italic">GEËLIMINEERD</h2>
-            <p className="text-slate-400 mb-8 font-medium">Wacht op de volgende ronde...</p>
-            <button onClick={() => window.location.reload()} className="bg-white text-slate-900 px-10 py-4 rounded-2xl font-black text-xl hover:bg-emerald-400 transition-all flex items-center gap-2 mx-auto">
+            <button onClick={() => window.location.reload()} className="bg-white text-slate-900 px-10 py-4 rounded-2xl font-black text-xl hover:bg-emerald-400 mt-6 flex items-center gap-2 mx-auto">
               <RotateCcw size={24} /> OPNIEUW
             </button>
           </div>
