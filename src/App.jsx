@@ -13,7 +13,7 @@ import {
   onSnapshot, 
   updateDoc
 } from 'firebase/firestore';
-import { Skull, RotateCcw, Crosshair, Users } from 'lucide-react';
+import { Skull, RotateCcw, Crosshair, Users, Play } from 'lucide-react';
 
 // --- CONFIGURATIE ---
 const FIREBASE_CONFIG = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
@@ -25,7 +25,7 @@ const FIREBASE_CONFIG = typeof __firebase_config !== 'undefined' ? JSON.parse(__
   appId: "1:773037810608:web:f8b22fc68fa1e0c34f2c75"
 };
 
-const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'boom-io-v3';
+const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'boom-io-v4-final';
 const app = initializeApp(FIREBASE_CONFIG);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -33,23 +33,68 @@ const db = getFirestore(app);
 // Game Constanten
 const ACCELERATION = 0.8;
 const FRICTION = 0.90;
-const MAX_SPEED = 8;
-const BULLET_SPEED = 18;
-const RELOAD_TIME = 250; 
-const MAP_WIDTH = 2000;  
-const MAP_HEIGHT = 1500; 
+const MAX_SPEED = 9;
+const BULLET_SPEED = 20;
+const RELOAD_TIME = 200; 
+const MAP_WIDTH = 2400;  // Extra grote map
+const MAP_HEIGHT = 1800; 
 const VIEWPORT_W = 800;
 const VIEWPORT_H = 600;
-const BULLET_LIFESPAN = 1000; 
+const BULLET_LIFESPAN = 1200; 
 
+// Uitgebreide Obstakels (Arena stijl)
 const OBSTACLES = [
-  { x: 900, y: 700, w: 200, h: 100 },
-  { x: 400, y: 300, w: 500, h: 40 },
-  { x: 1200, y: 300, w: 500, h: 40 },
-  { x: 200, y: 600, w: 60, h: 300 },
-  { x: 1740, y: 600, w: 60, h: 300 },
-  { x: 500, y: 1100, w: 1000, h: 40 },
+  // Buitenmuren (onzichtbaar in logica, maar zichtbaar in render) zijn de limieten
+  // Midden obstakels
+  { x: 1000, y: 700, w: 400, h: 400 }, // Het grote blok in het midden
+  { x: 400, y: 400, w: 200, h: 50 },
+  { x: 1800, y: 400, w: 200, h: 50 },
+  { x: 400, y: 1350, w: 200, h: 50 },
+  { x: 1800, y: 1350, w: 200, h: 50 },
+  // Verticale dekking
+  { x: 200, y: 600, w: 50, h: 600 },
+  { x: 2150, y: 600, w: 50, h: 600 },
+  // Verspreide blokjes
+  { x: 700, y: 300, w: 100, h: 100 },
+  { x: 1600, y: 300, w: 100, h: 100 },
+  { x: 700, y: 1400, w: 100, h: 100 },
+  { x: 1600, y: 1400, w: 100, h: 100 },
 ];
+
+// Helper: Check botsing tussen punt en rechthoek (met marge)
+function isPointInRect(x, y, rect, margin = 0) {
+  return x >= rect.x - margin && x <= rect.x + rect.w + margin && 
+         y >= rect.y - margin && y <= rect.y + rect.h + margin;
+}
+
+// Helper: Zoek een veilige spawnplek (CRUCIAAL)
+function findSafeSpawn() {
+  let safe = false;
+  let spawn = { x: 1200, y: 900 }; // Default center
+  let attempts = 0;
+
+  while (!safe && attempts < 100) {
+    // Genereer random punt binnen de map (met buffer van 100px aan randen)
+    const tx = Math.random() * (MAP_WIDTH - 200) + 100;
+    const ty = Math.random() * (MAP_HEIGHT - 200) + 100;
+    
+    let collision = false;
+    for (let obs of OBSTACLES) {
+      // Check of punt in obstakel zit (met 60px marge voor speler grootte)
+      if (isPointInRect(tx, ty, obs, 60)) {
+        collision = true;
+        break;
+      }
+    }
+    
+    if (!collision) {
+      spawn = { x: tx, y: ty };
+      safe = true;
+    }
+    attempts++;
+  }
+  return spawn;
+}
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -59,7 +104,8 @@ export default function App() {
   const [lobbyData, setLobbyData] = useState(null);
 
   const canvasRef = useRef(null);
-  const pos = useRef({ x: 1000, y: 750 });
+  // Initialiseer op veilige plek, maar wordt overschreven bij start
+  const pos = useRef({ x: 1200, y: 900 }); 
   const vel = useRef({ x: 0, y: 0 });
   const mousePosRaw = useRef({ x: 0, y: 0 });
   const keysPressed = useRef({});
@@ -68,7 +114,7 @@ export default function App() {
   const lastUpdateToDb = useRef(0);
   const frameRef = useRef();
 
-  // Firebase Auth
+  // 1. Auth
   useEffect(() => {
     const initAuth = async () => {
       if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -81,7 +127,7 @@ export default function App() {
     return onAuthStateChanged(auth, setUser);
   }, []);
 
-  // Lobby Sync
+  // 2. Lobby Sync
   useEffect(() => {
     if (!user || !lobbyCode || gameState === 'MENU') return;
     const lobbyRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'lobbies', lobbyCode);
@@ -89,13 +135,20 @@ export default function App() {
       if (snap.exists()) {
         const data = snap.data();
         setLobbyData(data);
-        if (data.status === 'PLAYING' && gameState === 'LOBBY') setGameState('PLAYING');
-        if (gameState === 'PLAYING' && data.players?.[user.uid]?.alive === false) setGameState('DEAD');
+        if (data.status === 'PLAYING' && gameState === 'LOBBY') {
+           // Als het spel start, pakken we de positie uit de DB of zoeken we een nieuwe veilige plek
+           const myStart = data.players?.[user.uid] || findSafeSpawn();
+           pos.current = { x: myStart.x, y: myStart.y };
+           setGameState('PLAYING');
+        }
+        if (gameState === 'PLAYING' && data.players?.[user.uid]?.alive === false) {
+           setGameState('DEAD');
+        }
       }
     });
   }, [user, lobbyCode, gameState]);
 
-  // Game Loop & Canvas Rendering
+  // 3. Game Loop
   useEffect(() => {
     if (gameState !== 'PLAYING') return;
 
@@ -115,7 +168,7 @@ export default function App() {
     const worldMouseX = mousePosRaw.current.x + cameraX;
     const worldMouseY = mousePosRaw.current.y + cameraY;
 
-    // Beweging
+    // A. Beweging & Frictie
     const dx = worldMouseX - pos.current.x;
     const dy = worldMouseY - pos.current.y;
     const dist = Math.sqrt(dx*dx + dy*dy);
@@ -128,28 +181,44 @@ export default function App() {
     vel.current.x *= FRICTION;
     vel.current.y *= FRICTION;
 
-    // Collision
-    const nextX = pos.current.x + vel.current.x;
-    const nextY = pos.current.y + vel.current.y;
-    const r = 15;
-
-    let canMoveX = nextX > r && nextX < MAP_WIDTH - r;
-    let canMoveY = nextY > r && nextY < MAP_HEIGHT - r;
-
-    for (let obs of OBSTACLES) {
-      if (nextX + r > obs.x && nextX - r < obs.x + obs.w && pos.current.y + r > obs.y && pos.current.y - r < obs.y + obs.h) canMoveX = false;
-      if (pos.current.x + r > obs.x && pos.current.x - r < obs.x + obs.w && nextY + r > obs.y && nextY - r < obs.y + obs.h) canMoveY = false;
+    // Snelheidslimiet
+    const speed = Math.sqrt(vel.current.x**2 + vel.current.y**2);
+    if (speed > MAX_SPEED) {
+        vel.current.x = (vel.current.x / speed) * MAX_SPEED;
+        vel.current.y = (vel.current.y / speed) * MAX_SPEED;
     }
 
-    if (canMoveX) pos.current.x = nextX; else vel.current.x = 0;
-    if (canMoveY) pos.current.y = nextY; else vel.current.y = 0;
+    // B. Collision Detection (Sliding)
+    let nextX = pos.current.x + vel.current.x;
+    let nextY = pos.current.y + vel.current.y;
+    const r = 20; // Speler radius
 
-    // Schieten
+    // Check Map Grenzen
+    if (nextX < r) nextX = r;
+    if (nextX > MAP_WIDTH - r) nextX = MAP_WIDTH - r;
+    if (nextY < r) nextY = r;
+    if (nextY > MAP_HEIGHT - r) nextY = MAP_HEIGHT - r;
+
+    // Check Obstakels (X as)
+    let hitX = false;
+    for (let obs of OBSTACLES) {
+      if (nextX + r > obs.x && nextX - r < obs.x + obs.w && pos.current.y + r > obs.y && pos.current.y - r < obs.y + obs.h) hitX = true;
+    }
+    if (!hitX) pos.current.x = nextX; else vel.current.x *= 0.5; // Bounce/Slide
+
+    // Check Obstakels (Y as)
+    let hitY = false;
+    for (let obs of OBSTACLES) {
+      if (pos.current.x + r > obs.x && pos.current.x - r < obs.x + obs.w && nextY + r > obs.y && nextY - r < obs.y + obs.h) hitY = true;
+    }
+    if (!hitY) pos.current.y = nextY; else vel.current.y *= 0.5;
+
+    // C. Schieten
     if ((keysPressed.current[' '] || isMouseDown.current) && Date.now() - lastShotTime.current > RELOAD_TIME) {
       shoot(worldMouseX, worldMouseY);
     }
 
-    // Hit detection
+    // D. Hit Detection (Lokaal)
     if (lobbyData?.bullets) {
       const now = Date.now();
       lobbyData.bullets.forEach(b => {
@@ -158,12 +227,12 @@ export default function App() {
           const bx = b.x + b.vx * age * 60;
           const by = b.y + b.vy * age * 60;
           const d = Math.sqrt((bx - pos.current.x)**2 + (by - pos.current.y)**2);
-          if (d < 25) die();
+          if (d < 25) die(); // 25px hit radius
         }
       });
     }
 
-    // Sync
+    // E. Sync naar DB (Throttled ~20fps)
     if (Date.now() - lastUpdateToDb.current > 50) {
       sync();
       lastUpdateToDb.current = Date.now();
@@ -175,86 +244,136 @@ export default function App() {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     
+    // Camera positie
     const camX = pos.current.x - VIEWPORT_W / 2;
     const camY = pos.current.y - VIEWPORT_H / 2;
 
-    // Clear
-    ctx.fillStyle = '#0f172a';
+    // 1. Achtergrond wissen
+    ctx.fillStyle = '#0f172a'; // Slate-900
     ctx.fillRect(0, 0, VIEWPORT_W, VIEWPORT_H);
 
     ctx.save();
-    ctx.translate(-camX, -camY);
+    ctx.translate(-camX, -camY); // Wereld verplaatsen
 
-    // Grid
-    ctx.strokeStyle = '#1e293b';
-    ctx.lineWidth = 1;
-    for (let x = 0; x <= MAP_WIDTH; x += 100) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, MAP_HEIGHT); ctx.stroke();
-    }
-    for (let y = 0; y <= MAP_HEIGHT; y += 100) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(MAP_WIDTH, y); ctx.stroke();
-    }
+    // 2. Grid Tekenen (Mooier raster)
+    ctx.strokeStyle = '#1e293b'; // Slate-800
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let x = 0; x <= MAP_WIDTH; x += 100) { ctx.moveTo(x, 0); ctx.lineTo(x, MAP_HEIGHT); }
+    for (let y = 0; y <= MAP_HEIGHT; y += 100) { ctx.moveTo(0, y); ctx.lineTo(MAP_WIDTH, y); }
+    ctx.stroke();
 
-    // Muren
-    ctx.fillStyle = '#334155';
-    ctx.strokeStyle = '#475569';
+    // 3. Obstakels
+    ctx.fillStyle = '#334155'; // Slate-700
+    ctx.strokeStyle = '#64748b'; // Slate-500
     ctx.lineWidth = 4;
     OBSTACLES.forEach(o => {
       ctx.fillRect(o.x, o.y, o.w, o.h);
       ctx.strokeRect(o.x, o.y, o.w, o.h);
+      // Detail: kruis in midden van obstakel voor 'texture' gevoel
+      ctx.beginPath();
+      ctx.moveTo(o.x, o.y); ctx.lineTo(o.x + o.w, o.y + o.h);
+      ctx.stroke();
     });
 
-    // Kogels
+    // 4. Kogels
     const now = Date.now();
-    ctx.fillStyle = '#fff';
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = '#fff';
+    ctx.fillStyle = '#fbbf24'; // Amber-400
+    ctx.shadowBlur = 15;
+    ctx.shadowColor = '#fbbf24';
     lobbyData?.bullets?.forEach(b => {
       const age = (now - b.createdAt) / 1000;
       if (age < BULLET_LIFESPAN / 1000) {
         const bx = b.x + b.vx * age * 60;
         const by = b.y + b.vy * age * 60;
+        
+        // Simpele occlusion check (teken niet als het achter een muur zit voor performance? Nee, te duur)
         ctx.beginPath();
-        ctx.arc(bx, by, 4, 0, Math.PI * 2);
+        ctx.arc(bx, by, 5, 0, Math.PI * 2);
         ctx.fill();
       }
     });
     ctx.shadowBlur = 0;
 
-    // Andere spelers
+    // 5. Andere Spelers
     Object.entries(lobbyData?.players || {}).forEach(([id, p]) => {
       if (id === user.uid || !p.alive) return;
-      ctx.fillStyle = '#e11d48';
-      ctx.beginPath();
-      ctx.roundRect(p.x - 20, p.y - 20, 40, 40, 8);
-      ctx.fill();
       
+      // Cirkel body
+      ctx.fillStyle = '#ef4444'; // Red-500
+      ctx.strokeStyle = '#991b1b'; // Red-800
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 20, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // Naam boven hoofd
       ctx.fillStyle = '#fff';
-      ctx.font = 'bold 12px sans-serif';
+      ctx.font = 'bold 14px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(p.name, p.x, p.y - 30);
     });
 
-    // Jijzelf
-    ctx.fillStyle = '#2563eb';
-    ctx.shadowBlur = 15;
-    ctx.shadowColor = '#3b82f6';
+    // 6. Jijzelf (Blauw)
+    ctx.fillStyle = '#3b82f6'; // Blue-500
+    ctx.strokeStyle = '#1e40af'; // Blue-800
+    ctx.lineWidth = 3;
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = 'rgba(59, 130, 246, 0.5)';
     ctx.beginPath();
-    ctx.roundRect(pos.current.x - 20, pos.current.y - 20, 40, 40, 10);
+    ctx.arc(pos.current.x, pos.current.y, 20, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
+    ctx.stroke();
+    
+    // Naam en indicator boven jezelf
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText("JIJ", pos.current.x, pos.current.y - 30);
 
-    ctx.restore();
+    ctx.restore(); // Einde wereld transformatie
 
-    // UI - Crosshair
-    ctx.strokeStyle = '#10b981';
+    // 7. UI Overlay: Minimap (Rechtsboven)
+    // Map size: 2400x1800. Minimap size: 240x180. Scale: 0.1
+    const mmScale = 0.1;
+    const mmW = MAP_WIDTH * mmScale;
+    const mmH = MAP_HEIGHT * mmScale;
+    const mmX = VIEWPORT_W - mmW - 20;
+    const mmY = 20;
+
+    // Minimap Achtergrond
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
+    ctx.strokeStyle = '#475569';
+    ctx.lineWidth = 2;
+    ctx.fillRect(mmX, mmY, mmW, mmH);
+    ctx.strokeRect(mmX, mmY, mmW, mmH);
+
+    // Minimap Obstakels
+    ctx.fillStyle = 'rgba(71, 85, 105, 0.8)';
+    OBSTACLES.forEach(o => {
+      ctx.fillRect(mmX + o.x * mmScale, mmY + o.y * mmScale, o.w * mmScale, o.h * mmScale);
+    });
+
+    // Minimap Spelers
+    Object.entries(lobbyData?.players || {}).forEach(([id, p]) => {
+      if (!p.alive) return;
+      ctx.fillStyle = id === user.uid ? '#3b82f6' : '#ef4444';
+      ctx.beginPath();
+      ctx.arc(mmX + p.x * mmScale, mmY + p.y * mmScale, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // 8. Crosshair (Muis)
+    const mx = mousePosRaw.current.x;
+    const my = mousePosRaw.current.y;
+    ctx.strokeStyle = '#10b981'; // Emerald-500
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(mousePosRaw.current.x, mousePosRaw.current.y, 10, 0, Math.PI*2);
-    ctx.moveTo(mousePosRaw.current.x - 15, mousePosRaw.current.y);
-    ctx.lineTo(mousePosRaw.current.x + 15, mousePosRaw.current.y);
-    ctx.moveTo(mousePosRaw.current.x, mousePosRaw.current.y - 15);
-    ctx.lineTo(mousePosRaw.current.x, mousePosRaw.current.y + 15);
+    ctx.arc(mx, my, 8, 0, Math.PI*2);
+    ctx.moveTo(mx - 12, my); ctx.lineTo(mx + 12, my);
+    ctx.moveTo(mx, my - 12); ctx.lineTo(mx, my + 12);
     ctx.stroke();
   };
 
@@ -282,7 +401,7 @@ export default function App() {
     };
     const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'lobbies', lobbyCode);
     const active = (lobbyData?.bullets || []).filter(blt => Date.now() - blt.createdAt < BULLET_LIFESPAN);
-    updateDoc(ref, { bullets: [...active.slice(-10), b] });
+    updateDoc(ref, { bullets: [...active.slice(-20), b] });
   };
 
   const die = () => {
@@ -293,27 +412,42 @@ export default function App() {
 
   const join = async () => {
     if (!playerName || !lobbyCode) return;
+    const startPos = findSafeSpawn();
     const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'lobbies', lobbyCode);
     await setDoc(ref, {
       status: 'WAITING',
       bullets: [],
-      players: { [user.uid]: { name: playerName, alive: true, x: 1000, y: 750 } }
+      players: { [user.uid]: { name: playerName, alive: true, x: startPos.x, y: startPos.y } }
     }, { merge: true });
     setGameState('LOBBY');
   };
 
   const start = async () => {
     const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'lobbies', lobbyCode);
-    await updateDoc(ref, { status: 'PLAYING' });
+    // Reset alle spelers naar een veilige spawn
+    const updates = {};
+    if (lobbyData?.players) {
+        Object.keys(lobbyData.players).forEach(uid => {
+            const s = findSafeSpawn();
+            updates[`players.${uid}.alive`] = true;
+            updates[`players.${uid}.x`] = s.x;
+            updates[`players.${uid}.y`] = s.y;
+        });
+    }
+    updates.status = 'PLAYING';
+    updates.bullets = [];
+    await updateDoc(ref, updates);
   };
+
+  // --- UI RENDER ---
 
   if (gameState === 'MENU') return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6 text-white font-sans">
       <div className="bg-slate-900 p-12 rounded-[3rem] shadow-2xl w-full max-w-sm border-b-8 border-emerald-500/20 text-center">
         <Crosshair size={60} className="text-emerald-400 mx-auto mb-6 animate-pulse" />
-        <h1 className="text-5xl font-black mb-10 tracking-tighter italic italic">BOOM.IO</h1>
-        <input className="w-full bg-slate-800 p-4 rounded-2xl mb-4 border border-slate-700 outline-none focus:border-emerald-500" placeholder="NAAM" value={playerName} onChange={e => setPlayerName(e.target.value)} />
-        <input className="w-full bg-slate-800 p-4 rounded-2xl mb-8 border border-slate-700 outline-none focus:border-emerald-500 uppercase" placeholder="LOBBY CODE" value={lobbyCode} onChange={e => setLobbyCode(e.target.value)} />
+        <h1 className="text-5xl font-black mb-10 tracking-tighter italic">BOOM.IO</h1>
+        <input className="w-full bg-slate-800 p-4 rounded-2xl mb-4 border border-slate-700 outline-none focus:border-emerald-500 text-white" placeholder="NAAM" value={playerName} onChange={e => setPlayerName(e.target.value)} />
+        <input className="w-full bg-slate-800 p-4 rounded-2xl mb-8 border border-slate-700 outline-none focus:border-emerald-500 uppercase text-white" placeholder="CODE" value={lobbyCode} onChange={e => setLobbyCode(e.target.value)} />
         <button onClick={join} className="w-full bg-emerald-500 py-5 rounded-2xl font-black text-xl hover:bg-emerald-400 shadow-[0_6px_0_rgb(16,185,129)] active:translate-y-1 transition-all text-slate-900">SPEEL NU</button>
       </div>
     </div>
@@ -332,7 +466,7 @@ export default function App() {
             </div>
           ))}
         </div>
-        <button onClick={start} className="w-full bg-blue-500 py-5 rounded-2xl font-black shadow-[0_6px_0_rgb(59,130,246)] uppercase">Start Match</button>
+        <button onClick={start} className="w-full bg-blue-500 py-5 rounded-2xl font-black shadow-[0_6px_0_rgb(59,130,246)] uppercase flex items-center justify-center gap-2"><Play size={20}/> Start Match</button>
       </div>
     </div>
   );
