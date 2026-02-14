@@ -44,7 +44,7 @@ const BULLET_LIFESPAN = 1500;
 const WIN_SCORE = 5;
 const MOUSE_DEADZONE = 60; 
 
-// Obstakels
+// Obstakels op de kaart
 const OBSTACLES = [
   { x: 1000, y: 700, w: 400, h: 400 }, 
   { x: 400, y: 400, w: 200, h: 50 },
@@ -102,6 +102,7 @@ export default function App() {
   const frameRef = useRef();
   const deathIntervalRef = useRef();
 
+  // Initialiseer Firebase Auth
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -111,9 +112,7 @@ export default function App() {
           await signInAnonymously(auth);
         }
       } catch (err) {
-        console.error("Auth error:", err);
-      } finally {
-        setLoading(false);
+        console.error("Authenticatie fout:", err);
       }
     };
     initAuth();
@@ -132,6 +131,7 @@ export default function App() {
     };
   }, []);
 
+  // Luister naar lobby updates
   useEffect(() => {
     if (!user || !lobbyCode || gameState === 'MENU') return;
     const lobbyRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'lobbies', lobbyCode);
@@ -141,6 +141,7 @@ export default function App() {
         const data = snap.data();
         setLobbyData(data);
         
+        // Start de game als de status verandert
         if (data.status === 'PLAYING' && gameState === 'LOBBY') {
            const myStart = data.players?.[user.uid] || findSafeSpawn();
            pos.current = { x: myStart.x, y: myStart.y };
@@ -148,19 +149,22 @@ export default function App() {
            setGameState('PLAYING');
         }
 
+        // Check voor een winnaar
         if (data.winner) {
             setGameState('WINNER');
         }
 
+        // Check of je bent geraakt
         if (gameState === 'PLAYING' && data.players?.[user.uid]?.alive === false) {
            startDeathSequence();
         }
       }
-    }, (error) => console.error("Snapshot error:", error));
+    }, (error) => console.error("Snapshot fout:", error));
 
     return () => unsubscribe();
   }, [user, lobbyCode, gameState]);
 
+  // Game Loop
   useEffect(() => {
     if (gameState !== 'PLAYING') return;
 
@@ -211,11 +215,13 @@ export default function App() {
     const dy = mousePosScreen.current.y - centerY;
     const dist = Math.sqrt(dx*dx + dy*dy);
 
+    // Beweging richting muis
     if (dist > MOUSE_DEADZONE) {
       vel.current.x += (dx / dist) * ACCELERATION;
       vel.current.y += (dy / dist) * ACCELERATION;
     }
 
+    // Dash functionaliteit
     if (keysPressed.current['Shift'] && Date.now() - lastDashTime.current > DASH_COOLDOWN) {
         const normX = dist > 0 ? dx / dist : 1;
         const normY = dist > 0 ? dy / dist : 0;
@@ -239,9 +245,11 @@ export default function App() {
     let nextY = pos.current.y + vel.current.y;
     const r = 20;
 
+    // Map grenzen
     if (nextX < r) nextX = r; if (nextX > MAP_WIDTH - r) nextX = MAP_WIDTH - r;
     if (nextY < r) nextY = r; if (nextY > MAP_HEIGHT - r) nextY = MAP_HEIGHT - r;
 
+    // Collisie met obstakels
     let hitX = false;
     for (let obs of OBSTACLES) {
       if (nextX + r > obs.x && nextX - r < obs.x + obs.w && pos.current.y + r > obs.y && pos.current.y - r < obs.y + obs.h) hitX = true;
@@ -254,6 +262,7 @@ export default function App() {
     }
     if (!hitY) pos.current.y = nextY; else vel.current.y *= 0.5;
 
+    // Schieten
     if (keysPressed.current[' '] && Date.now() - lastShotTime.current > RELOAD_TIME) {
       const cameraX = pos.current.x - screenSize.w / 2;
       const cameraY = pos.current.y - screenSize.h / 2;
@@ -262,6 +271,7 @@ export default function App() {
       shoot(worldMouseX, worldMouseY);
     }
 
+    // Hit detectie voor kogels van anderen
     if (lobbyData?.bullets && user) {
       const now = Date.now();
       lobbyData.bullets.forEach(b => {
@@ -275,6 +285,7 @@ export default function App() {
       });
     }
 
+    // Synchroniseer positie met database
     if (Date.now() - lastUpdateToDb.current > 50 && user) {
       sync();
       lastUpdateToDb.current = Date.now();
@@ -294,6 +305,7 @@ export default function App() {
     ctx.save();
     ctx.translate(-camX, -camY);
 
+    // Raster tekenen
     ctx.strokeStyle = '#1e293b';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -301,6 +313,7 @@ export default function App() {
     for (let y = 0; y <= MAP_HEIGHT; y += 100) { ctx.moveTo(0, y); ctx.lineTo(MAP_WIDTH, y); }
     ctx.stroke();
 
+    // Obstakels tekenen
     ctx.fillStyle = '#334155';
     ctx.strokeStyle = '#64748b';
     ctx.lineWidth = 4;
@@ -309,6 +322,7 @@ export default function App() {
       ctx.strokeRect(o.x, o.y, o.w, o.h);
     });
 
+    // Kogels tekenen
     const now = Date.now();
     ctx.fillStyle = '#fbbf24';
     ctx.shadowBlur = 10;
@@ -331,6 +345,7 @@ export default function App() {
     });
     ctx.shadowBlur = 0;
 
+    // Andere spelers tekenen
     Object.entries(lobbyData?.players || {}).forEach(([id, p]) => {
       if (!user || id === user.uid || !p.alive) return;
       ctx.fillStyle = '#ef4444';
@@ -348,6 +363,7 @@ export default function App() {
       }
     });
 
+    // Lokale speler tekenen
     ctx.fillStyle = '#3b82f6';
     ctx.shadowBlur = 20;
     ctx.shadowColor = 'rgba(59, 130, 246, 0.5)';
@@ -360,6 +376,7 @@ export default function App() {
     ctx.textAlign = 'center';
     ctx.fillText("JIJ", pos.current.x, pos.current.y - 45);
 
+    // Reload balk
     const timeSinceShot = now - lastShotTime.current;
     if (timeSinceShot < RELOAD_TIME) {
         const pct = timeSinceShot / RELOAD_TIME;
@@ -369,6 +386,7 @@ export default function App() {
         ctx.fillRect(pos.current.x - 20, pos.current.y + 30, 40 * pct, 4);
     }
 
+    // Dash cooldown balk
     const timeSinceDash = now - lastDashTime.current;
     if (timeSinceDash < DASH_COOLDOWN) {
         const pct = timeSinceDash / DASH_COOLDOWN;
@@ -379,6 +397,7 @@ export default function App() {
     }
     ctx.restore();
 
+    // Minimap tekenen
     const mmScale = 0.08;
     const mmW = MAP_WIDTH * mmScale;
     const mmH = MAP_HEIGHT * mmScale;
@@ -404,7 +423,7 @@ export default function App() {
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'left';
-    ctx.fillText("SPACE = Shoot | SHIFT = Dash", 20, screenSize.h - 20);
+    ctx.fillText("SPATIE = Schieten | SHIFT = Dash", 20, screenSize.h - 20);
   };
 
   const sync = () => {
@@ -489,7 +508,10 @@ export default function App() {
 
   if (loading) return (
     <div className="w-full h-screen bg-slate-950 flex items-center justify-center text-white">
-      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500"></div>
+      <div className="flex flex-col items-center gap-4">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500"></div>
+        <p className="text-emerald-500 font-bold animate-pulse uppercase tracking-widest">Verbinden met servers...</p>
+      </div>
     </div>
   );
 
@@ -500,7 +522,7 @@ export default function App() {
         <h1 className="text-5xl font-black mb-10 italic">BOOM.IO</h1>
         <input className="w-full bg-slate-800 p-4 rounded-2xl mb-4 border border-slate-700 outline-none focus:border-emerald-500 text-white" placeholder="JOUW NAAM" value={playerName} onChange={e => setPlayerName(e.target.value)} />
         <input className="w-full bg-slate-800 p-4 rounded-2xl mb-8 border border-slate-700 outline-none focus:border-emerald-500 uppercase text-white" placeholder="LOBBY CODE" value={lobbyCode} onChange={e => setLobbyCode(e.target.value)} />
-        <button onClick={join} disabled={!user} className="w-full bg-emerald-500 py-5 rounded-2xl font-black text-xl hover:bg-emerald-400 text-slate-900 shadow-[0_6px_0_rgb(16,185,129)] active:translate-y-1 transition-all uppercase disabled:opacity-50">Speel Nu</button>
+        <button onClick={join} disabled={!user || !playerName || !lobbyCode} className="w-full bg-emerald-500 py-5 rounded-2xl font-black text-xl hover:bg-emerald-400 text-slate-900 shadow-[0_6px_0_rgb(16,185,129)] active:translate-y-1 transition-all uppercase disabled:opacity-50">Speel Nu</button>
       </div>
     </div>
   );
@@ -510,13 +532,13 @@ export default function App() {
       <div className="bg-slate-900 p-10 rounded-[2.5rem] w-full max-w-md text-center border-b-8 border-blue-500/20">
         <div className="flex justify-between items-center mb-6">
             <h2 className="text-2xl font-bold text-slate-400 uppercase">Lobby: {lobbyCode}</h2>
-            <div className="bg-emerald-500/10 text-emerald-400 px-3 py-1 rounded-full text-xs font-bold">First to {WIN_SCORE}</div>
+            <div className="bg-emerald-500/10 text-emerald-400 px-3 py-1 rounded-full text-xs font-bold">Eerst naar {WIN_SCORE}</div>
         </div>
         <div className="space-y-3 mb-10 max-h-60 overflow-y-auto">
           {Object.values(lobbyData?.players || {}).map((p, i) => (
             <div key={i} className="bg-slate-800 p-4 rounded-2xl border border-slate-700 flex justify-between font-bold items-center">
               <span className="flex items-center gap-2"><div className="w-2 h-2 bg-blue-500 rounded-full"/> {p.name}</span>
-              <span className="text-slate-500 text-sm">SPELER</span>
+              <span className="text-slate-500 text-sm italic">ONLINE</span>
             </div>
           ))}
         </div>
@@ -561,7 +583,7 @@ export default function App() {
           <div className="text-center">
             <Skull size={80} className="text-rose-500 mx-auto mb-6 animate-pulse" />
             <h2 className="text-5xl font-black mb-4 uppercase italic">Geëlimineerd</h2>
-            <p className="text-xl text-slate-400 mb-8">Respawn in <span className="text-white font-mono text-3xl font-bold">{deathTimer}</span></p>
+            <p className="text-xl text-slate-400 mb-8">Respawn over <span className="text-white font-mono text-3xl font-bold">{deathTimer}</span> seconden</p>
             <div className="w-64 h-2 bg-slate-800 rounded-full mx-auto overflow-hidden">
                 <div className="h-full bg-emerald-500 transition-all duration-1000 ease-linear" style={{ width: `${(deathTimer/5)*100}%` }} />
             </div>
