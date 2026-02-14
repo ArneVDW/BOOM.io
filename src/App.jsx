@@ -13,7 +13,7 @@ import {
   onSnapshot, 
   updateDoc
 } from 'firebase/firestore';
-import { Skull, RotateCcw, Crosshair, Users, Play } from 'lucide-react';
+import { Skull, Crosshair, Trophy, Play } from 'lucide-react';
 
 // --- CONFIGURATIE ---
 const FIREBASE_CONFIG = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
@@ -25,72 +25,57 @@ const FIREBASE_CONFIG = typeof __firebase_config !== 'undefined' ? JSON.parse(__
   appId: "1:773037810608:web:f8b22fc68fa1e0c34f2c75"
 };
 
-const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'boom-io-v4-final';
+const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'boom-io-final-v5';
 const app = initializeApp(FIREBASE_CONFIG);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// Game Constanten
-const ACCELERATION = 0.8;
-const FRICTION = 0.90;
-const MAX_SPEED = 9;
-const BULLET_SPEED = 20;
-const RELOAD_TIME = 200; 
-const MAP_WIDTH = 2400;  // Extra grote map
+// --- GAME BALANS ---
+const ACCELERATION = 0.4; 
+const FRICTION = 0.92;
+const MAX_SPEED = 5; 
+const DASH_SPEED = 18; 
+const DASH_COOLDOWN = 5000;
+const BULLET_SPEED = 16;
+const RELOAD_TIME = 1000; 
+const MAP_WIDTH = 2400;  
 const MAP_HEIGHT = 1800; 
-const VIEWPORT_W = 800;
-const VIEWPORT_H = 600;
-const BULLET_LIFESPAN = 1200; 
+const BULLET_LIFESPAN = 1500; 
+const WIN_SCORE = 5;
+const MOUSE_DEADZONE = 60; 
 
-// Uitgebreide Obstakels (Arena stijl)
+// Obstakels
 const OBSTACLES = [
-  // Buitenmuren (onzichtbaar in logica, maar zichtbaar in render) zijn de limieten
-  // Midden obstakels
-  { x: 1000, y: 700, w: 400, h: 400 }, // Het grote blok in het midden
+  { x: 1000, y: 700, w: 400, h: 400 }, 
   { x: 400, y: 400, w: 200, h: 50 },
   { x: 1800, y: 400, w: 200, h: 50 },
   { x: 400, y: 1350, w: 200, h: 50 },
   { x: 1800, y: 1350, w: 200, h: 50 },
-  // Verticale dekking
   { x: 200, y: 600, w: 50, h: 600 },
   { x: 2150, y: 600, w: 50, h: 600 },
-  // Verspreide blokjes
   { x: 700, y: 300, w: 100, h: 100 },
   { x: 1600, y: 300, w: 100, h: 100 },
   { x: 700, y: 1400, w: 100, h: 100 },
   { x: 1600, y: 1400, w: 100, h: 100 },
 ];
 
-// Helper: Check botsing tussen punt en rechthoek (met marge)
 function isPointInRect(x, y, rect, margin = 0) {
   return x >= rect.x - margin && x <= rect.x + rect.w + margin && 
          y >= rect.y - margin && y <= rect.y + rect.h + margin;
 }
 
-// Helper: Zoek een veilige spawnplek (CRUCIAAL)
 function findSafeSpawn() {
   let safe = false;
-  let spawn = { x: 1200, y: 900 }; // Default center
+  let spawn = { x: 1200, y: 900 };
   let attempts = 0;
-
   while (!safe && attempts < 100) {
-    // Genereer random punt binnen de map (met buffer van 100px aan randen)
     const tx = Math.random() * (MAP_WIDTH - 200) + 100;
     const ty = Math.random() * (MAP_HEIGHT - 200) + 100;
-    
     let collision = false;
     for (let obs of OBSTACLES) {
-      // Check of punt in obstakel zit (met 60px marge voor speler grootte)
-      if (isPointInRect(tx, ty, obs, 60)) {
-        collision = true;
-        break;
-      }
+      if (isPointInRect(tx, ty, obs, 60)) { collision = true; break; }
     }
-    
-    if (!collision) {
-      spawn = { x: tx, y: ty };
-      safe = true;
-    }
+    if (!collision) { spawn = { x: tx, y: ty }; safe = true; }
     attempts++;
   }
   return spawn;
@@ -98,57 +83,84 @@ function findSafeSpawn() {
 
 export default function App() {
   const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [gameState, setGameState] = useState('MENU'); 
   const [lobbyCode, setLobbyCode] = useState('');
   const [playerName, setPlayerName] = useState('');
   const [lobbyData, setLobbyData] = useState(null);
+  const [screenSize, setScreenSize] = useState({ w: window.innerWidth, h: window.innerHeight });
+  const [deathTimer, setDeathTimer] = useState(0);
 
   const canvasRef = useRef(null);
-  // Initialiseer op veilige plek, maar wordt overschreven bij start
-  const pos = useRef({ x: 1200, y: 900 }); 
+  const pos = useRef({ x: 1200, y: 900 });
   const vel = useRef({ x: 0, y: 0 });
-  const mousePosRaw = useRef({ x: 0, y: 0 });
+  const mousePosScreen = useRef({ x: 0, y: 0 }); 
   const keysPressed = useRef({});
-  const isMouseDown = useRef(false);
   const lastShotTime = useRef(0);
+  const lastDashTime = useRef(0);
   const lastUpdateToDb = useRef(0);
   const frameRef = useRef();
+  const deathIntervalRef = useRef();
 
-  // 1. Auth
   useEffect(() => {
     const initAuth = async () => {
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token);
-      } else {
-        await signInAnonymously(auth);
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Auth error:", err);
+      } finally {
+        setLoading(false);
       }
     };
     initAuth();
-    return onAuthStateChanged(auth, setUser);
+    
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      if (u) setLoading(false);
+    });
+
+    const handleResize = () => setScreenSize({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener('resize', handleResize);
+    
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      unsubscribe();
+    };
   }, []);
 
-  // 2. Lobby Sync
   useEffect(() => {
     if (!user || !lobbyCode || gameState === 'MENU') return;
     const lobbyRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'lobbies', lobbyCode);
-    return onSnapshot(lobbyRef, (snap) => {
+    
+    const unsubscribe = onSnapshot(lobbyRef, (snap) => {
       if (snap.exists()) {
         const data = snap.data();
         setLobbyData(data);
+        
         if (data.status === 'PLAYING' && gameState === 'LOBBY') {
-           // Als het spel start, pakken we de positie uit de DB of zoeken we een nieuwe veilige plek
            const myStart = data.players?.[user.uid] || findSafeSpawn();
            pos.current = { x: myStart.x, y: myStart.y };
+           vel.current = { x: 0, y: 0 };
            setGameState('PLAYING');
         }
+
+        if (data.winner) {
+            setGameState('WINNER');
+        }
+
         if (gameState === 'PLAYING' && data.players?.[user.uid]?.alive === false) {
-           setGameState('DEAD');
+           startDeathSequence();
         }
       }
-    });
+    }, (error) => console.error("Snapshot error:", error));
+
+    return () => unsubscribe();
   }, [user, lobbyCode, gameState]);
 
-  // 3. Game Loop
   useEffect(() => {
     if (gameState !== 'PLAYING') return;
 
@@ -160,66 +172,97 @@ export default function App() {
 
     frameRef.current = requestAnimationFrame(render);
     return () => cancelAnimationFrame(frameRef.current);
-  }, [gameState, lobbyData]);
+  }, [gameState, lobbyData, screenSize]);
+
+  const startDeathSequence = () => {
+      setGameState('DEAD');
+      setDeathTimer(5);
+      if (deathIntervalRef.current) clearInterval(deathIntervalRef.current);
+      deathIntervalRef.current = setInterval(() => {
+          setDeathTimer(prev => {
+              if (prev <= 1) {
+                  clearInterval(deathIntervalRef.current);
+                  respawn();
+                  return 0;
+              }
+              return prev - 1;
+          });
+      }, 1000);
+  };
+
+  const respawn = async () => {
+      if (!user) return;
+      const safe = findSafeSpawn();
+      pos.current = safe;
+      vel.current = { x: 0, y: 0 };
+      const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'lobbies', lobbyCode);
+      await updateDoc(ref, { 
+          [`players.${user.uid}.alive`]: true,
+          [`players.${user.uid}.x`]: safe.x,
+          [`players.${user.uid}.y`]: safe.y
+      });
+      setGameState('PLAYING');
+  };
 
   const updatePhysics = () => {
-    const cameraX = pos.current.x - VIEWPORT_W / 2;
-    const cameraY = pos.current.y - VIEWPORT_H / 2;
-    const worldMouseX = mousePosRaw.current.x + cameraX;
-    const worldMouseY = mousePosRaw.current.y + cameraY;
-
-    // A. Beweging & Frictie
-    const dx = worldMouseX - pos.current.x;
-    const dy = worldMouseY - pos.current.y;
+    const centerX = screenSize.w / 2;
+    const centerY = screenSize.h / 2;
+    const dx = mousePosScreen.current.x - centerX;
+    const dy = mousePosScreen.current.y - centerY;
     const dist = Math.sqrt(dx*dx + dy*dy);
 
-    if (dist > 10) {
+    if (dist > MOUSE_DEADZONE) {
       vel.current.x += (dx / dist) * ACCELERATION;
       vel.current.y += (dy / dist) * ACCELERATION;
+    }
+
+    if (keysPressed.current['Shift'] && Date.now() - lastDashTime.current > DASH_COOLDOWN) {
+        const normX = dist > 0 ? dx / dist : 1;
+        const normY = dist > 0 ? dy / dist : 0;
+        vel.current.x += normX * DASH_SPEED;
+        vel.current.y += normY * DASH_SPEED;
+        lastDashTime.current = Date.now();
     }
 
     vel.current.x *= FRICTION;
     vel.current.y *= FRICTION;
 
-    // Snelheidslimiet
     const speed = Math.sqrt(vel.current.x**2 + vel.current.y**2);
-    if (speed > MAX_SPEED) {
-        vel.current.x = (vel.current.x / speed) * MAX_SPEED;
-        vel.current.y = (vel.current.y / speed) * MAX_SPEED;
+    const cap = (Date.now() - lastDashTime.current < 300) ? DASH_SPEED : MAX_SPEED;
+    
+    if (speed > cap) {
+        vel.current.x = (vel.current.x / speed) * cap;
+        vel.current.y = (vel.current.y / speed) * cap;
     }
 
-    // B. Collision Detection (Sliding)
     let nextX = pos.current.x + vel.current.x;
     let nextY = pos.current.y + vel.current.y;
-    const r = 20; // Speler radius
+    const r = 20;
 
-    // Check Map Grenzen
-    if (nextX < r) nextX = r;
-    if (nextX > MAP_WIDTH - r) nextX = MAP_WIDTH - r;
-    if (nextY < r) nextY = r;
-    if (nextY > MAP_HEIGHT - r) nextY = MAP_HEIGHT - r;
+    if (nextX < r) nextX = r; if (nextX > MAP_WIDTH - r) nextX = MAP_WIDTH - r;
+    if (nextY < r) nextY = r; if (nextY > MAP_HEIGHT - r) nextY = MAP_HEIGHT - r;
 
-    // Check Obstakels (X as)
     let hitX = false;
     for (let obs of OBSTACLES) {
       if (nextX + r > obs.x && nextX - r < obs.x + obs.w && pos.current.y + r > obs.y && pos.current.y - r < obs.y + obs.h) hitX = true;
     }
-    if (!hitX) pos.current.x = nextX; else vel.current.x *= 0.5; // Bounce/Slide
+    if (!hitX) pos.current.x = nextX; else vel.current.x *= 0.5;
 
-    // Check Obstakels (Y as)
     let hitY = false;
     for (let obs of OBSTACLES) {
       if (pos.current.x + r > obs.x && pos.current.x - r < obs.x + obs.w && nextY + r > obs.y && nextY - r < obs.y + obs.h) hitY = true;
     }
     if (!hitY) pos.current.y = nextY; else vel.current.y *= 0.5;
 
-    // C. Schieten
-    if ((keysPressed.current[' '] || isMouseDown.current) && Date.now() - lastShotTime.current > RELOAD_TIME) {
+    if (keysPressed.current[' '] && Date.now() - lastShotTime.current > RELOAD_TIME) {
+      const cameraX = pos.current.x - screenSize.w / 2;
+      const cameraY = pos.current.y - screenSize.h / 2;
+      const worldMouseX = mousePosScreen.current.x + cameraX;
+      const worldMouseY = mousePosScreen.current.y + cameraY;
       shoot(worldMouseX, worldMouseY);
     }
 
-    // D. Hit Detection (Lokaal)
-    if (lobbyData?.bullets) {
+    if (lobbyData?.bullets && user) {
       const now = Date.now();
       lobbyData.bullets.forEach(b => {
         if (b.ownerId !== user.uid) {
@@ -227,13 +270,12 @@ export default function App() {
           const bx = b.x + b.vx * age * 60;
           const by = b.y + b.vy * age * 60;
           const d = Math.sqrt((bx - pos.current.x)**2 + (by - pos.current.y)**2);
-          if (d < 25) die(); // 25px hit radius
+          if (d < 25) die(b.ownerId);
         }
       });
     }
 
-    // E. Sync naar DB (Throttled ~20fps)
-    if (Date.now() - lastUpdateToDb.current > 50) {
+    if (Date.now() - lastUpdateToDb.current > 50 && user) {
       sync();
       lastUpdateToDb.current = Date.now();
     }
@@ -243,149 +285,139 @@ export default function App() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    
-    // Camera positie
-    const camX = pos.current.x - VIEWPORT_W / 2;
-    const camY = pos.current.y - VIEWPORT_H / 2;
+    const camX = pos.current.x - screenSize.w / 2;
+    const camY = pos.current.y - screenSize.h / 2;
 
-    // 1. Achtergrond wissen
-    ctx.fillStyle = '#0f172a'; // Slate-900
-    ctx.fillRect(0, 0, VIEWPORT_W, VIEWPORT_H);
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, screenSize.w, screenSize.h);
 
     ctx.save();
-    ctx.translate(-camX, -camY); // Wereld verplaatsen
+    ctx.translate(-camX, -camY);
 
-    // 2. Grid Tekenen (Mooier raster)
-    ctx.strokeStyle = '#1e293b'; // Slate-800
+    ctx.strokeStyle = '#1e293b';
     ctx.lineWidth = 2;
     ctx.beginPath();
     for (let x = 0; x <= MAP_WIDTH; x += 100) { ctx.moveTo(x, 0); ctx.lineTo(x, MAP_HEIGHT); }
     for (let y = 0; y <= MAP_HEIGHT; y += 100) { ctx.moveTo(0, y); ctx.lineTo(MAP_WIDTH, y); }
     ctx.stroke();
 
-    // 3. Obstakels
-    ctx.fillStyle = '#334155'; // Slate-700
-    ctx.strokeStyle = '#64748b'; // Slate-500
+    ctx.fillStyle = '#334155';
+    ctx.strokeStyle = '#64748b';
     ctx.lineWidth = 4;
     OBSTACLES.forEach(o => {
       ctx.fillRect(o.x, o.y, o.w, o.h);
       ctx.strokeRect(o.x, o.y, o.w, o.h);
-      // Detail: kruis in midden van obstakel voor 'texture' gevoel
-      ctx.beginPath();
-      ctx.moveTo(o.x, o.y); ctx.lineTo(o.x + o.w, o.y + o.h);
-      ctx.stroke();
     });
 
-    // 4. Kogels
     const now = Date.now();
-    ctx.fillStyle = '#fbbf24'; // Amber-400
-    ctx.shadowBlur = 15;
+    ctx.fillStyle = '#fbbf24';
+    ctx.shadowBlur = 10;
     ctx.shadowColor = '#fbbf24';
     lobbyData?.bullets?.forEach(b => {
       const age = (now - b.createdAt) / 1000;
       if (age < BULLET_LIFESPAN / 1000) {
         const bx = b.x + b.vx * age * 60;
         const by = b.y + b.vy * age * 60;
-        
-        // Simpele occlusion check (teken niet als het achter een muur zit voor performance? Nee, te duur)
-        ctx.beginPath();
-        ctx.arc(bx, by, 5, 0, Math.PI * 2);
-        ctx.fill();
+        let hitObs = false;
+        for (let obs of OBSTACLES) {
+             if (isPointInRect(bx, by, obs)) hitObs = true;
+        }
+        if (!hitObs) {
+            ctx.beginPath();
+            ctx.arc(bx, by, 5, 0, Math.PI * 2);
+            ctx.fill();
+        }
       }
     });
     ctx.shadowBlur = 0;
 
-    // 5. Andere Spelers
     Object.entries(lobbyData?.players || {}).forEach(([id, p]) => {
-      if (id === user.uid || !p.alive) return;
-      
-      // Cirkel body
-      ctx.fillStyle = '#ef4444'; // Red-500
-      ctx.strokeStyle = '#991b1b'; // Red-800
-      ctx.lineWidth = 3;
+      if (!user || id === user.uid || !p.alive) return;
+      ctx.fillStyle = '#ef4444';
       ctx.beginPath();
       ctx.arc(p.x, p.y, 20, 0, Math.PI * 2);
       ctx.fill();
-      ctx.stroke();
-
-      // Naam boven hoofd
       ctx.fillStyle = '#fff';
-      ctx.font = 'bold 14px sans-serif';
+      ctx.font = 'bold 12px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(p.name, p.x, p.y - 30);
+      if (p.score > 0) {
+        ctx.font = '10px sans-serif';
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillText(`★ ${p.score}`, p.x, p.y - 42);
+      }
     });
 
-    // 6. Jijzelf (Blauw)
-    ctx.fillStyle = '#3b82f6'; // Blue-500
-    ctx.strokeStyle = '#1e40af'; // Blue-800
-    ctx.lineWidth = 3;
+    ctx.fillStyle = '#3b82f6';
     ctx.shadowBlur = 20;
     ctx.shadowColor = 'rgba(59, 130, 246, 0.5)';
     ctx.beginPath();
     ctx.arc(pos.current.x, pos.current.y, 20, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
-    ctx.stroke();
-    
-    // Naam en indicator boven jezelf
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 14px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText("JIJ", pos.current.x, pos.current.y - 30);
+    ctx.fillText("JIJ", pos.current.x, pos.current.y - 45);
 
-    ctx.restore(); // Einde wereld transformatie
+    const timeSinceShot = now - lastShotTime.current;
+    if (timeSinceShot < RELOAD_TIME) {
+        const pct = timeSinceShot / RELOAD_TIME;
+        ctx.fillStyle = '#334155';
+        ctx.fillRect(pos.current.x - 20, pos.current.y + 30, 40, 4);
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(pos.current.x - 20, pos.current.y + 30, 40 * pct, 4);
+    }
 
-    // 7. UI Overlay: Minimap (Rechtsboven)
-    // Map size: 2400x1800. Minimap size: 240x180. Scale: 0.1
-    const mmScale = 0.1;
+    const timeSinceDash = now - lastDashTime.current;
+    if (timeSinceDash < DASH_COOLDOWN) {
+        const pct = timeSinceDash / DASH_COOLDOWN;
+        ctx.fillStyle = '#1e3a8a';
+        ctx.fillRect(pos.current.x - 20, pos.current.y + 36, 40, 4);
+        ctx.fillStyle = '#3b82f6';
+        ctx.fillRect(pos.current.x - 20, pos.current.y + 36, 40 * pct, 4);
+    }
+    ctx.restore();
+
+    const mmScale = 0.08;
     const mmW = MAP_WIDTH * mmScale;
     const mmH = MAP_HEIGHT * mmScale;
-    const mmX = VIEWPORT_W - mmW - 20;
+    const mmX = screenSize.w - mmW - 20;
     const mmY = 20;
-
-    // Minimap Achtergrond
     ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
+    ctx.fillRect(mmX, mmY, mmW, mmH);
     ctx.strokeStyle = '#475569';
     ctx.lineWidth = 2;
-    ctx.fillRect(mmX, mmY, mmW, mmH);
     ctx.strokeRect(mmX, mmY, mmW, mmH);
-
-    // Minimap Obstakels
     ctx.fillStyle = 'rgba(71, 85, 105, 0.8)';
     OBSTACLES.forEach(o => {
       ctx.fillRect(mmX + o.x * mmScale, mmY + o.y * mmScale, o.w * mmScale, o.h * mmScale);
     });
-
-    // Minimap Spelers
     Object.entries(lobbyData?.players || {}).forEach(([id, p]) => {
-      if (!p.alive) return;
+      if (!p.alive || !user) return;
       ctx.fillStyle = id === user.uid ? '#3b82f6' : '#ef4444';
       ctx.beginPath();
       ctx.arc(mmX + p.x * mmScale, mmY + p.y * mmScale, 3, 0, Math.PI * 2);
       ctx.fill();
     });
-
-    // 8. Crosshair (Muis)
-    const mx = mousePosRaw.current.x;
-    const my = mousePosRaw.current.y;
-    ctx.strokeStyle = '#10b981'; // Emerald-500
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(mx, my, 8, 0, Math.PI*2);
-    ctx.moveTo(mx - 12, my); ctx.lineTo(mx + 12, my);
-    ctx.moveTo(mx, my - 12); ctx.lineTo(mx, my + 12);
-    ctx.stroke();
+    
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText("SPACE = Shoot | SHIFT = Dash", 20, screenSize.h - 20);
   };
 
   const sync = () => {
+    if (!user || !lobbyCode) return;
     const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'lobbies', lobbyCode);
     updateDoc(ref, {
       [`players.${user.uid}.x`]: pos.current.x,
       [`players.${user.uid}.y`]: pos.current.y,
-    }).catch(() => {});
+    }).catch(()=>{});
   };
 
   const shoot = (tx, ty) => {
+    if (!user) return;
     lastShotTime.current = Date.now();
     const dx = tx - pos.current.x;
     const dy = ty - pos.current.y;
@@ -404,94 +436,135 @@ export default function App() {
     updateDoc(ref, { bullets: [...active.slice(-20), b] });
   };
 
-  const die = () => {
+  const die = async (killerId) => {
+    if (!user) return;
     setGameState('DEAD');
     const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'lobbies', lobbyCode);
-    updateDoc(ref, { [`players.${user.uid}.alive`]: false });
+    const updates = { [`players.${user.uid}.alive`]: false };
+    if (killerId && lobbyData.players[killerId]) {
+        const newScore = (lobbyData.players[killerId].score || 0) + 1;
+        updates[`players.${killerId}.score`] = newScore;
+        if (newScore >= WIN_SCORE) updates.winner = lobbyData.players[killerId].name;
+    }
+    await updateDoc(ref, updates);
   };
 
   const join = async () => {
-    if (!playerName || !lobbyCode) return;
+    if (!playerName || !lobbyCode || !user) return;
     const startPos = findSafeSpawn();
     const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'lobbies', lobbyCode);
     await setDoc(ref, {
       status: 'WAITING',
       bullets: [],
-      players: { [user.uid]: { name: playerName, alive: true, x: startPos.x, y: startPos.y } }
+      winner: null,
+      players: { [user.uid]: { name: playerName, alive: true, x: startPos.x, y: startPos.y, score: 0 } }
     }, { merge: true });
     setGameState('LOBBY');
   };
 
   const start = async () => {
     const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'lobbies', lobbyCode);
-    // Reset alle spelers naar een veilige spawn
-    const updates = {};
-    if (lobbyData?.players) {
-        Object.keys(lobbyData.players).forEach(uid => {
-            const s = findSafeSpawn();
-            updates[`players.${uid}.alive`] = true;
-            updates[`players.${uid}.x`] = s.x;
-            updates[`players.${uid}.y`] = s.y;
-        });
-    }
-    updates.status = 'PLAYING';
-    updates.bullets = [];
+    const updates = { status: 'PLAYING', bullets: [], winner: null };
+    Object.keys(lobbyData.players).forEach(uid => {
+        const s = findSafeSpawn();
+        updates[`players.${uid}.alive`] = true;
+        updates[`players.${uid}.x`] = s.x;
+        updates[`players.${uid}.y`] = s.y;
+        updates[`players.${uid}.score`] = 0;
+    });
     await updateDoc(ref, updates);
   };
 
-  // --- UI RENDER ---
+  const handleKeyDown = (e) => keysPressed.current[e.key] = true;
+  const handleKeyUp = (e) => keysPressed.current[e.key] = false;
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, []);
+
+  if (loading) return (
+    <div className="w-full h-screen bg-slate-950 flex items-center justify-center text-white">
+      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500"></div>
+    </div>
+  );
 
   if (gameState === 'MENU') return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6 text-white font-sans">
+    <div className="w-full h-screen bg-slate-950 flex items-center justify-center text-white font-sans overflow-hidden">
       <div className="bg-slate-900 p-12 rounded-[3rem] shadow-2xl w-full max-w-sm border-b-8 border-emerald-500/20 text-center">
         <Crosshair size={60} className="text-emerald-400 mx-auto mb-6 animate-pulse" />
-        <h1 className="text-5xl font-black mb-10 tracking-tighter italic">BOOM.IO</h1>
-        <input className="w-full bg-slate-800 p-4 rounded-2xl mb-4 border border-slate-700 outline-none focus:border-emerald-500 text-white" placeholder="NAAM" value={playerName} onChange={e => setPlayerName(e.target.value)} />
-        <input className="w-full bg-slate-800 p-4 rounded-2xl mb-8 border border-slate-700 outline-none focus:border-emerald-500 uppercase text-white" placeholder="CODE" value={lobbyCode} onChange={e => setLobbyCode(e.target.value)} />
-        <button onClick={join} className="w-full bg-emerald-500 py-5 rounded-2xl font-black text-xl hover:bg-emerald-400 shadow-[0_6px_0_rgb(16,185,129)] active:translate-y-1 transition-all text-slate-900">SPEEL NU</button>
+        <h1 className="text-5xl font-black mb-10 italic">BOOM.IO</h1>
+        <input className="w-full bg-slate-800 p-4 rounded-2xl mb-4 border border-slate-700 outline-none focus:border-emerald-500 text-white" placeholder="JOUW NAAM" value={playerName} onChange={e => setPlayerName(e.target.value)} />
+        <input className="w-full bg-slate-800 p-4 rounded-2xl mb-8 border border-slate-700 outline-none focus:border-emerald-500 uppercase text-white" placeholder="LOBBY CODE" value={lobbyCode} onChange={e => setLobbyCode(e.target.value)} />
+        <button onClick={join} disabled={!user} className="w-full bg-emerald-500 py-5 rounded-2xl font-black text-xl hover:bg-emerald-400 text-slate-900 shadow-[0_6px_0_rgb(16,185,129)] active:translate-y-1 transition-all uppercase disabled:opacity-50">Speel Nu</button>
       </div>
     </div>
   );
 
   if (gameState === 'LOBBY') return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6 text-white font-sans">
-      <div className="bg-slate-900 p-10 rounded-[2.5rem] w-full max-w-sm text-center border-b-8 border-blue-500/20">
-        <Users size={40} className="text-blue-400 mx-auto mb-4" />
-        <h2 className="text-2xl font-bold mb-6 text-slate-400 uppercase tracking-widest">Lobby: {lobbyCode}</h2>
-        <div className="space-y-3 mb-10">
+    <div className="w-full h-screen bg-slate-950 flex items-center justify-center text-white font-sans overflow-hidden">
+      <div className="bg-slate-900 p-10 rounded-[2.5rem] w-full max-w-md text-center border-b-8 border-blue-500/20">
+        <div className="flex justify-between items-center mb-6">
+            <h2 className="text-2xl font-bold text-slate-400 uppercase">Lobby: {lobbyCode}</h2>
+            <div className="bg-emerald-500/10 text-emerald-400 px-3 py-1 rounded-full text-xs font-bold">First to {WIN_SCORE}</div>
+        </div>
+        <div className="space-y-3 mb-10 max-h-60 overflow-y-auto">
           {Object.values(lobbyData?.players || {}).map((p, i) => (
-            <div key={i} className="bg-slate-800 p-4 rounded-2xl border border-slate-700 flex justify-between font-bold">
-              <span>{p.name}</span>
-              <span className="text-emerald-400 text-xs">READY</span>
+            <div key={i} className="bg-slate-800 p-4 rounded-2xl border border-slate-700 flex justify-between font-bold items-center">
+              <span className="flex items-center gap-2"><div className="w-2 h-2 bg-blue-500 rounded-full"/> {p.name}</span>
+              <span className="text-slate-500 text-sm">SPELER</span>
             </div>
           ))}
         </div>
-        <button onClick={start} className="w-full bg-blue-500 py-5 rounded-2xl font-black shadow-[0_6px_0_rgb(59,130,246)] uppercase flex items-center justify-center gap-2"><Play size={20}/> Start Match</button>
+        <button onClick={start} className="w-full bg-blue-500 py-5 rounded-2xl font-black shadow-[0_6px_0_rgb(59,130,246)] uppercase flex items-center justify-center gap-2 text-white hover:bg-blue-400 transition-colors"><Play size={20}/> Start Match</button>
       </div>
     </div>
   );
 
+  if (gameState === 'WINNER') return (
+    <div className="fixed inset-0 bg-slate-950 flex items-center justify-center z-[200] text-white">
+        <div className="text-center animate-bounce">
+            <Trophy size={100} className="text-yellow-400 mx-auto mb-6" />
+            <h1 className="text-6xl font-black mb-4 uppercase text-yellow-400">Winnaar!</h1>
+            <p className="text-4xl font-bold mb-10">{lobbyData?.winner}</p>
+            <button onClick={() => window.location.reload()} className="bg-white text-slate-900 px-8 py-4 rounded-full font-bold uppercase hover:bg-emerald-400">Terug naar Menu</button>
+        </div>
+    </div>
+  );
+
   return (
-    <div className="fixed inset-0 bg-black flex items-center justify-center overflow-hidden cursor-none">
+    <div className="fixed inset-0 bg-black overflow-hidden cursor-none">
       <canvas 
         ref={canvasRef}
-        width={VIEWPORT_W}
-        height={VIEWPORT_H}
-        className="bg-slate-900 rounded-lg shadow-2xl"
-        onMouseMove={e => {
-          const rect = canvasRef.current.getBoundingClientRect();
-          mousePosRaw.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-        }}
-        onMouseDown={e => { if(e.button === 0) isMouseDown.current = true; }}
-        onMouseUp={() => isMouseDown.current = false}
+        width={screenSize.w}
+        height={screenSize.h}
+        onMouseMove={e => mousePosScreen.current = { x: e.clientX, y: e.clientY }}
       />
+      <div className="absolute top-4 left-4 bg-black/40 p-4 rounded-xl backdrop-blur-sm border border-white/10 text-white pointer-events-none select-none">
+         <h3 className="font-bold text-xs uppercase text-slate-400 mb-2 italic">Scorebord</h3>
+         {Object.values(lobbyData?.players || {})
+            .sort((a,b) => b.score - a.score)
+            .map((p, i) => (
+             <div key={i} className="flex justify-between w-40 text-sm mb-1">
+                 <span className={p.name === playerName ? "text-blue-400 font-bold" : "text-white"}>{i+1}. {p.name}</span>
+                 <span className="font-mono text-yellow-400 font-bold">{p.score || 0}</span>
+             </div>
+         ))}
+      </div>
 
       {gameState === 'DEAD' && (
-        <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex items-center justify-center z-[100]">
-          <div className="text-center p-12 bg-slate-900 rounded-[3rem] border-b-8 border-rose-600 shadow-2xl max-w-xs w-full">
-            <Skull size={64} className="text-rose-500 mx-auto mb-6" />
-            <h2 className="text-4xl font-black mb-10 text-white uppercase italic">K.O.</h2>
-            <button onClick={() => window.location.reload()} className="bg-white text-slate-950 px-8 py-5 rounded-2xl font-black text-lg hover:bg-emerald-400 transition-all flex items-center justify-center gap-3 w-full uppercase"><RotateCcw size={24} /> Herstart</button>
+        <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-[100] text-white">
+          <div className="text-center">
+            <Skull size={80} className="text-rose-500 mx-auto mb-6 animate-pulse" />
+            <h2 className="text-5xl font-black mb-4 uppercase italic">Geëlimineerd</h2>
+            <p className="text-xl text-slate-400 mb-8">Respawn in <span className="text-white font-mono text-3xl font-bold">{deathTimer}</span></p>
+            <div className="w-64 h-2 bg-slate-800 rounded-full mx-auto overflow-hidden">
+                <div className="h-full bg-emerald-500 transition-all duration-1000 ease-linear" style={{ width: `${(deathTimer/5)*100}%` }} />
+            </div>
           </div>
         </div>
       )}
