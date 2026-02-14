@@ -76,6 +76,11 @@ export default function App() {
   const lastUpdateToDb = useRef(0);
 
   useEffect(() => {
+    // Forceer Tailwind inladen als het niet werkt via de build
+    const script = document.createElement('script');
+    script.src = "https://cdn.tailwindcss.com";
+    document.head.appendChild(script);
+
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -237,15 +242,26 @@ export default function App() {
     await updateDoc(lobbyRef, { status: 'PLAYING', bullets: [], players: newPlayers });
   };
 
+  // Inline styles voor zekerheid als CSS niet laadt
+  const containerStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: '100vh',
+    backgroundColor: '#0f172a',
+    color: 'white',
+    fontFamily: 'sans-serif'
+  };
+
   if (gameState === 'MENU') {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-900 text-white font-sans">
-        <div className="bg-slate-800 p-10 rounded-[2rem] shadow-2xl w-full max-w-md border-4 border-slate-700">
-          <h1 className="text-6xl font-black text-center mb-10 text-emerald-400 italic tracking-tighter">BOOM.IO</h1>
+      <div style={containerStyle}>
+        <div className="bg-slate-800 p-10 rounded-[2rem] shadow-2xl w-full max-w-md border-4 border-slate-700 text-center">
+          <h1 className="text-6xl font-black mb-10 text-emerald-400 italic tracking-tighter">BOOM.IO</h1>
           <div className="space-y-6">
-            <input className="w-full bg-slate-700 p-5 rounded-2xl border-2 border-slate-600 text-xl outline-none focus:border-emerald-500 transition-all" placeholder="JOUW NAAM" value={playerName} onChange={e => setPlayerName(e.target.value)} />
-            <input className="w-full bg-slate-700 p-5 rounded-2xl border-2 border-slate-600 text-xl outline-none focus:border-emerald-500 uppercase font-mono" placeholder="LOBBY CODE" value={lobbyCode} onChange={e => setLobbyCode(e.target.value)} />
-            <button onClick={joinLobby} className="w-full bg-emerald-500 py-5 rounded-2xl font-black text-2xl hover:bg-emerald-400 active:scale-95 transition-all shadow-[0_8px_0_rgb(16,185,129)] mb-2">SPEEL NU</button>
+            <input className="w-full bg-slate-700 p-5 rounded-2xl border-2 border-slate-600 text-xl outline-none focus:border-emerald-500 text-white" placeholder="JOUW NAAM" value={playerName} onChange={e => setPlayerName(e.target.value)} />
+            <input className="w-full bg-slate-700 p-5 rounded-2xl border-2 border-slate-600 text-xl outline-none focus:border-emerald-500 uppercase font-mono text-white" placeholder="LOBBY CODE" value={lobbyCode} onChange={e => setLobbyCode(e.target.value)} />
+            <button onClick={joinLobby} className="w-full bg-emerald-500 py-5 rounded-2xl font-black text-2xl hover:bg-emerald-400 active:scale-95 transition-all shadow-[0_8px_0_rgb(16,185,129)] text-slate-900">SPEEL NU</button>
           </div>
         </div>
       </div>
@@ -255,18 +271,18 @@ export default function App() {
   if (gameState === 'LOBBY') {
     const spelers = lobbyData?.players ? Object.values(lobbyData.players) : [];
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-900 text-white">
+      <div style={containerStyle}>
         <div className="bg-slate-800 p-10 rounded-[2rem] shadow-xl w-full max-w-md border-4 border-slate-700 text-center">
-          <h2 className="text-3xl font-black mb-8">LOBBY: <span className="text-emerald-400">{lobbyCode}</span></h2>
+          <h2 className="text-3xl font-black mb-8 uppercase">LOBBY: <span className="text-emerald-400">{lobbyCode}</span></h2>
           <div className="space-y-4 mb-10">
             {spelers.map((p, i) => (
               <div key={i} className="bg-slate-700 p-4 rounded-2xl flex items-center justify-between border-2 border-slate-600">
                 <span className="font-bold text-lg">{p.name}</span>
-                <span className="text-xs font-black bg-emerald-500 text-slate-900 px-3 py-1 rounded-full">GEJOINED</span>
+                <span className="text-xs font-black bg-emerald-500 text-slate-900 px-3 py-1 rounded-full uppercase">Klaar</span>
               </div>
             ))}
           </div>
-          <button onClick={startSpel} className="w-full bg-blue-500 py-5 rounded-2xl font-black text-xl hover:bg-blue-400 flex items-center justify-center gap-3 shadow-[0_8px_0_rgb(59,130,246)]">
+          <button onClick={startSpel} className="w-full bg-blue-500 py-5 rounded-2xl font-black text-xl hover:bg-blue-400 flex items-center justify-center gap-3 shadow-[0_8px_0_rgb(59,130,246)] text-white">
             <Play fill="currentColor" /> START GAME
           </button>
         </div>
@@ -275,17 +291,16 @@ export default function App() {
   }
 
   return (
-    <div className="fixed inset-0 bg-slate-950 flex items-center justify-center overflow-hidden cursor-crosshair select-none">
+    <div className="fixed inset-0 bg-slate-950 flex items-center justify-center overflow-hidden cursor-crosshair select-none" style={{ backgroundColor: '#020617' }}>
       <div 
         id="game-area" 
         className="relative bg-slate-900 border-[12px] border-slate-800 shadow-2xl overflow-hidden" 
-        style={{ width: MAP_WIDTH, height: MAP_HEIGHT }}
+        style={{ width: MAP_WIDTH, height: MAP_HEIGHT, position: 'relative', backgroundColor: '#0f172a' }}
       >
-        {/* Grid achtergrond */}
         <div className="absolute inset-0 opacity-20 pointer-events-none" style={{ backgroundImage: 'linear-gradient(#475569 2px, transparent 2px), linear-gradient(90deg, #475569 2px, transparent 2px)', backgroundSize: '40px 40px' }} />
 
         {OBSTACLES.map((o, i) => (
-          <div key={i} className="absolute bg-slate-700 border-4 border-slate-600 rounded-lg shadow-inner" style={{ left: o.x, top: o.y, width: o.w, height: o.h }} />
+          <div key={i} className="absolute bg-slate-700 border-4 border-slate-600 rounded-lg" style={{ left: o.x, top: o.y, width: o.w, height: o.h, position: 'absolute' }} />
         ))}
 
         {lobbyData?.players && Object.entries(lobbyData.players).map(([id, p]) => {
@@ -296,14 +311,14 @@ export default function App() {
           const reloadProgress = Math.min(100, ((Date.now() - lastShotTime.current) / RELOAD_TIME) * 100);
 
           return (
-            <div key={id} className="absolute z-20" style={{ left: x - 20, top: y - 20, width: 40, height: 40 }}>
+            <div key={id} style={{ left: x - 20, top: y - 20, width: 40, height: 40, position: 'absolute', zIndex: 20 }}>
               <div className="absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap px-2 py-0.5 bg-black/50 rounded text-[12px] font-black uppercase text-white">{p.name}</div>
               {isMe && (
                 <div className="absolute -top-3 left-0 right-0 h-2 bg-slate-800 rounded-full border border-slate-700 overflow-hidden">
-                  <div className="h-full bg-emerald-400 transition-all duration-75" style={{ width: `${reloadProgress}%` }} />
+                  <div className="h-full bg-emerald-400" style={{ width: `${reloadProgress}%` }} />
                 </div>
               )}
-              <div className={`w-full h-full rounded-full border-4 flex items-center justify-center shadow-lg transform transition-transform duration-75 ${isMe ? 'bg-blue-500 border-blue-300' : 'bg-rose-500 border-rose-300'}`}>
+              <div className={`w-full h-full rounded-full border-4 flex items-center justify-center shadow-lg ${isMe ? 'bg-blue-500 border-blue-300' : 'bg-rose-500 border-rose-300'}`}>
                 <Shield size={20} className="text-white/40" />
               </div>
             </div>
@@ -323,18 +338,17 @@ export default function App() {
           if (hitObs) return null;
 
           return (
-            <div key={b.id} className="absolute bg-yellow-400 rounded-full w-3 h-3 z-10 shadow-[0_0_15px_#facc15]" 
-              style={{ left: curX - 6, top: curY - 6 }} />
+            <div key={b.id} className="bg-yellow-400 rounded-full w-3 h-3 shadow-[0_0_15px_#facc15]" 
+              style={{ left: curX - 6, top: curY - 6, position: 'absolute', zIndex: 10 }} />
           );
         })}
       </div>
 
       {gameState === 'DEAD' && (
         <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-xl flex items-center justify-center z-50">
-          <div className="text-center p-16 bg-slate-800 rounded-[3rem] border-8 border-rose-500 shadow-[0_0_50px_rgba(244,63,94,0.3)] scale-110">
+          <div className="text-center p-16 bg-slate-800 rounded-[3rem] border-8 border-rose-500 shadow-2xl">
             <Skull size={100} className="text-rose-500 mx-auto mb-8 animate-pulse" />
-            <h2 className="text-6xl font-black mb-4 text-white italic tracking-tighter">GEËLIMINEERD</h2>
-            <p className="text-slate-400 text-xl mb-10 font-bold uppercase tracking-widest">Wacht op de volgende ronde...</p>
+            <h2 className="text-6xl font-black mb-4 text-white italic tracking-tighter uppercase">Geëlimineerd</h2>
             <button onClick={() => window.location.reload()} className="bg-white text-slate-900 px-12 py-5 rounded-2xl font-black text-2xl hover:bg-emerald-400 transition-all flex items-center gap-3 mx-auto shadow-[0_8px_0_#ccc]">
               <RotateCcw size={28} /> OPNIEUW
             </button>
