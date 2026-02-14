@@ -14,10 +14,9 @@ import {
   updateDoc, 
   arrayUnion
 } from 'firebase/firestore';
-import { Crosshair, Shield, Play, Skull, RotateCcw } from 'lucide-react';
+import { Shield, Play, Skull, RotateCcw } from 'lucide-react';
 
 // --- CONFIGURATIE ---
-// LET OP: Zorg dat FIREBASE_CONFIG goed wordt afgesloten met };
 const FIREBASE_CONFIG = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
   apiKey: "AIzaSyDw-WSx1oYTHzadXUB7csmKNhZlO0RTw6Y",
   authDomain: "multiplayer-shooter-c0b9f.firebaseapp.com",
@@ -25,11 +24,10 @@ const FIREBASE_CONFIG = typeof __firebase_config !== 'undefined' ? JSON.parse(__
   storageBucket: "multiplayer-shooter-c0b9f.firebasestorage.app",
   messagingSenderId: "773037810608",
   appId: "1:773037810608:web:f8b22fc68fa1e0c34f2c75"
-}; // <--- Dit is de "}" die waarschijnlijk miste in jouw bestand!
+};
 
 const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'mijn-shooter-game';
 
-// Initialiseer Firebase
 const app = initializeApp(FIREBASE_CONFIG);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -39,7 +37,7 @@ const PLAYER_SPEED = 4;
 const BULLET_SPEED = 8;
 const RELOAD_TIME = 800; 
 const PLAYER_SIZE = 40;
-const BULLET_SIZE = 8;
+const BULLET_SIZE = 10;
 const MAP_WIDTH = 800;
 const MAP_HEIGHT = 600;
 
@@ -70,8 +68,8 @@ export default function App() {
   const [lobbyData, setLobbyData] = useState(null);
   const [error, setError] = useState('');
 
-  const localPos = useRef({ x: 100, y: 100 });
-  const mousePos = useRef({ x: 0, y: 0 });
+  const localPos = useRef({ x: 400, y: 300 });
+  const mousePos = useRef({ x: 400, y: 300 });
   const lastShotTime = useRef(0);
   const keysPressed = useRef({});
   const gameLoopRef = useRef(null);
@@ -101,7 +99,7 @@ export default function App() {
         setLobbyData(data);
         if (data.status === 'PLAYING' && gameState === 'LOBBY') {
           setGameState('PLAYING');
-          localPos.current = { x: Math.random() * 600 + 100, y: Math.random() * 400 + 100 };
+          localPos.current = { x: 400, y: 300 };
           requestAnimationFrame(gameLoop);
         }
         if (gameState === 'PLAYING' && data.players?.[user.uid]?.alive === false) {
@@ -146,7 +144,7 @@ export default function App() {
                 const bx = bullet.x + (bullet.vx * age * 60);
                 const by = bullet.y + (bullet.vy * age * 60);
                 const dist = Math.sqrt(Math.pow(bx - localPos.current.x, 2) + Math.pow(by - localPos.current.y, 2));
-                if (dist < (PLAYER_SIZE / 2 + BULLET_SIZE / 2)) {
+                if (dist < (PLAYER_SIZE / 2)) {
                     handleDeath();
                 }
             }
@@ -223,7 +221,7 @@ export default function App() {
     await setDoc(lobbyRef, {
       status: 'WAITING',
       bullets: [],
-      players: { [user.uid]: { name: playerName, alive: true, x: 100, y: 100 } }
+      players: { [user.uid]: { name: playerName, alive: true, x: 400, y: 300 } }
     }, { merge: true });
     setGameState('LOBBY');
   };
@@ -231,20 +229,23 @@ export default function App() {
   const startSpel = async () => {
     const lobbyRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'lobbies', lobbyCode);
     const newPlayers = { ...lobbyData.players };
-    Object.keys(newPlayers).forEach(id => newPlayers[id].alive = true);
+    Object.keys(newPlayers).forEach(id => {
+        newPlayers[id].alive = true;
+        newPlayers[id].x = 400;
+        newPlayers[id].y = 300;
+    });
     await updateDoc(lobbyRef, { status: 'PLAYING', bullets: [], players: newPlayers });
   };
 
   if (gameState === 'MENU') {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-white p-4 font-sans">
-        <div className="bg-slate-800 p-8 rounded-3xl shadow-2xl w-full max-w-md border border-slate-700">
-          <h1 className="text-5xl font-black text-center mb-8 text-emerald-400 italic">BOOM.IO</h1>
-          <div className="space-y-4">
-            {error && <p className="text-rose-400 text-center text-sm font-bold">{error}</p>}
-            <input className="w-full bg-slate-700 p-4 rounded-xl border border-slate-600 outline-none focus:border-emerald-500" placeholder="Naam" value={playerName} onChange={e => setPlayerName(e.target.value)} />
-            <input className="w-full bg-slate-700 p-4 rounded-xl border border-slate-600 outline-none focus:border-emerald-500 uppercase font-mono" placeholder="Lobby Code" value={lobbyCode} onChange={e => setLobbyCode(e.target.value)} />
-            <button onClick={joinLobby} className="w-full bg-emerald-500 py-4 rounded-xl font-bold text-xl hover:bg-emerald-400 active:scale-95 transition-all">SPEEL NU</button>
+      <div className="flex items-center justify-center min-h-screen bg-slate-900 text-white font-sans">
+        <div className="bg-slate-800 p-10 rounded-[2rem] shadow-2xl w-full max-w-md border-4 border-slate-700">
+          <h1 className="text-6xl font-black text-center mb-10 text-emerald-400 italic tracking-tighter">BOOM.IO</h1>
+          <div className="space-y-6">
+            <input className="w-full bg-slate-700 p-5 rounded-2xl border-2 border-slate-600 text-xl outline-none focus:border-emerald-500 transition-all" placeholder="JOUW NAAM" value={playerName} onChange={e => setPlayerName(e.target.value)} />
+            <input className="w-full bg-slate-700 p-5 rounded-2xl border-2 border-slate-600 text-xl outline-none focus:border-emerald-500 uppercase font-mono" placeholder="LOBBY CODE" value={lobbyCode} onChange={e => setLobbyCode(e.target.value)} />
+            <button onClick={joinLobby} className="w-full bg-emerald-500 py-5 rounded-2xl font-black text-2xl hover:bg-emerald-400 active:scale-95 transition-all shadow-[0_8px_0_rgb(16,185,129)] mb-2">SPEEL NU</button>
           </div>
         </div>
       </div>
@@ -254,19 +255,19 @@ export default function App() {
   if (gameState === 'LOBBY') {
     const spelers = lobbyData?.players ? Object.values(lobbyData.players) : [];
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-white">
-        <div className="bg-slate-800 p-8 rounded-3xl shadow-xl w-full max-w-md border border-slate-700 text-center">
-          <h2 className="text-2xl font-bold mb-6">LOBBY: {lobbyCode}</h2>
-          <div className="space-y-3 mb-8">
+      <div className="flex items-center justify-center min-h-screen bg-slate-900 text-white">
+        <div className="bg-slate-800 p-10 rounded-[2rem] shadow-xl w-full max-w-md border-4 border-slate-700 text-center">
+          <h2 className="text-3xl font-black mb-8">LOBBY: <span className="text-emerald-400">{lobbyCode}</span></h2>
+          <div className="space-y-4 mb-10">
             {spelers.map((p, i) => (
-              <div key={i} className="bg-slate-700/50 p-4 rounded-xl flex items-center justify-between border border-slate-600">
-                <span className="font-bold">{p.name}</span>
-                <span className="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-1 rounded">READY</span>
+              <div key={i} className="bg-slate-700 p-4 rounded-2xl flex items-center justify-between border-2 border-slate-600">
+                <span className="font-bold text-lg">{p.name}</span>
+                <span className="text-xs font-black bg-emerald-500 text-slate-900 px-3 py-1 rounded-full">GEJOINED</span>
               </div>
             ))}
           </div>
-          <button onClick={startSpel} className="w-full bg-blue-600 py-4 rounded-xl font-bold text-lg hover:bg-blue-500 flex items-center justify-center gap-2">
-            <Play size={20} /> START GAME
+          <button onClick={startSpel} className="w-full bg-blue-500 py-5 rounded-2xl font-black text-xl hover:bg-blue-400 flex items-center justify-center gap-3 shadow-[0_8px_0_rgb(59,130,246)]">
+            <Play fill="currentColor" /> START GAME
           </button>
         </div>
       </div>
@@ -274,12 +275,17 @@ export default function App() {
   }
 
   return (
-    <div className="w-full h-screen bg-slate-950 flex items-center justify-center overflow-hidden cursor-crosshair">
-      <div id="game-area" className="relative bg-slate-900 border-8 border-slate-800 shadow-2xl" style={{ width: MAP_WIDTH, height: MAP_HEIGHT }}>
-        <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'linear-gradient(#475569 1px, transparent 1px), linear-gradient(90deg, #475569 1px, transparent 1px)', backgroundSize: '50px 50px' }} />
+    <div className="fixed inset-0 bg-slate-950 flex items-center justify-center overflow-hidden cursor-crosshair select-none">
+      <div 
+        id="game-area" 
+        className="relative bg-slate-900 border-[12px] border-slate-800 shadow-2xl overflow-hidden" 
+        style={{ width: MAP_WIDTH, height: MAP_HEIGHT }}
+      >
+        {/* Grid achtergrond */}
+        <div className="absolute inset-0 opacity-20 pointer-events-none" style={{ backgroundImage: 'linear-gradient(#475569 2px, transparent 2px), linear-gradient(90deg, #475569 2px, transparent 2px)', backgroundSize: '40px 40px' }} />
 
         {OBSTACLES.map((o, i) => (
-          <div key={i} className="absolute bg-slate-700 border-2 border-slate-600 rounded-sm" style={{ left: o.x, top: o.y, width: o.w, height: o.h }} />
+          <div key={i} className="absolute bg-slate-700 border-4 border-slate-600 rounded-lg shadow-inner" style={{ left: o.x, top: o.y, width: o.w, height: o.h }} />
         ))}
 
         {lobbyData?.players && Object.entries(lobbyData.players).map(([id, p]) => {
@@ -290,15 +296,15 @@ export default function App() {
           const reloadProgress = Math.min(100, ((Date.now() - lastShotTime.current) / RELOAD_TIME) * 100);
 
           return (
-            <div key={id} className="absolute transition-all duration-75 ease-linear" style={{ left: x - 20, top: y - 20, width: 40, height: 40 }}>
-              <div className="absolute -top-7 left-0 right-0 text-center text-[11px] font-black uppercase text-white drop-shadow-md">{p.name}</div>
+            <div key={id} className="absolute z-20" style={{ left: x - 20, top: y - 20, width: 40, height: 40 }}>
+              <div className="absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap px-2 py-0.5 bg-black/50 rounded text-[12px] font-black uppercase text-white">{p.name}</div>
               {isMe && (
-                <div className="absolute -top-2 left-0 right-0 h-1.5 bg-slate-800 rounded-full border border-slate-700">
+                <div className="absolute -top-3 left-0 right-0 h-2 bg-slate-800 rounded-full border border-slate-700 overflow-hidden">
                   <div className="h-full bg-emerald-400 transition-all duration-75" style={{ width: `${reloadProgress}%` }} />
                 </div>
               )}
-              <div className={`w-full h-full rounded-full border-4 flex items-center justify-center shadow-xl ${isMe ? 'bg-blue-500 border-blue-300' : 'bg-rose-500 border-rose-300'}`}>
-                <Shield size={18} className="text-white/50" />
+              <div className={`w-full h-full rounded-full border-4 flex items-center justify-center shadow-lg transform transition-transform duration-75 ${isMe ? 'bg-blue-500 border-blue-300' : 'bg-rose-500 border-rose-300'}`}>
+                <Shield size={20} className="text-white/40" />
               </div>
             </div>
           );
@@ -306,7 +312,7 @@ export default function App() {
 
         {lobbyData?.bullets?.map(b => {
           const age = (Date.now() - b.createdAt) / 1000;
-          if (age > 1.2) return null;
+          if (age > 1.5) return null;
           const curX = b.x + (b.vx * age * 60);
           const curY = b.y + (b.vy * age * 60);
           
@@ -317,19 +323,20 @@ export default function App() {
           if (hitObs) return null;
 
           return (
-            <div key={b.id} className="absolute bg-yellow-300 rounded-full w-2.5 h-2.5 shadow-[0_0_12px_#fde047]" 
-              style={{ left: curX - 5, top: curY - 5 }} />
+            <div key={b.id} className="absolute bg-yellow-400 rounded-full w-3 h-3 z-10 shadow-[0_0_15px_#facc15]" 
+              style={{ left: curX - 6, top: curY - 6 }} />
           );
         })}
       </div>
 
       {gameState === 'DEAD' && (
-        <div className="absolute inset-0 bg-slate-900/90 backdrop-blur-md flex items-center justify-center z-50">
-          <div className="text-center p-12 bg-slate-800 rounded-[3rem] border-4 border-rose-500 shadow-2xl">
-            <Skull size={80} className="text-rose-500 mx-auto mb-6 animate-bounce" />
-            <h2 className="text-5xl font-black mb-2 text-white italic">GEËLIMINEERD</h2>
-            <button onClick={() => window.location.reload()} className="bg-white text-slate-900 px-10 py-4 rounded-2xl font-black text-xl hover:bg-emerald-400 mt-6 flex items-center gap-2 mx-auto">
-              <RotateCcw size={24} /> OPNIEUW
+        <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-xl flex items-center justify-center z-50">
+          <div className="text-center p-16 bg-slate-800 rounded-[3rem] border-8 border-rose-500 shadow-[0_0_50px_rgba(244,63,94,0.3)] scale-110">
+            <Skull size={100} className="text-rose-500 mx-auto mb-8 animate-pulse" />
+            <h2 className="text-6xl font-black mb-4 text-white italic tracking-tighter">GEËLIMINEERD</h2>
+            <p className="text-slate-400 text-xl mb-10 font-bold uppercase tracking-widest">Wacht op de volgende ronde...</p>
+            <button onClick={() => window.location.reload()} className="bg-white text-slate-900 px-12 py-5 rounded-2xl font-black text-2xl hover:bg-emerald-400 transition-all flex items-center gap-3 mx-auto shadow-[0_8px_0_#ccc]">
+              <RotateCcw size={28} /> OPNIEUW
             </button>
           </div>
         </div>
