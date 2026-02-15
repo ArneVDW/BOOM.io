@@ -2,7 +2,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { Skull, Crosshair, Trophy, Play } from 'lucide-react';
 
-// --- GAME BALANS (Precies zoals je originele code) ---
+// --- CONFIGURATIE ---
+const SERVER_URL = "https://wanting-dimensions-animals-regulation.trycloudflare.com";
+
+// --- GAME BALANS ---
 const ACCELERATION = 0.4; 
 const FRICTION = 0.92;
 const MAX_SPEED = 5; 
@@ -16,7 +19,6 @@ const BULLET_LIFESPAN = 1500;
 const WIN_SCORE = 5;
 const MOUSE_DEADZONE = 60; 
 
-// Obstakels (Identiek aan jouw opzet)
 const OBSTACLES = [
   { x: 1000, y: 700, w: 400, h: 400 }, 
   { x: 400, y: 400, w: 200, h: 50 },
@@ -31,11 +33,6 @@ const OBSTACLES = [
   { x: 1600, y: 1400, w: 100, h: 100 },
 ];
 
-function isPointInRect(x, y, rect, margin = 0) {
-  return x >= rect.x - margin && x <= rect.x + rect.w + margin && 
-         y >= rect.y - margin && y <= rect.y + rect.h + margin;
-}
-
 export default function App() {
   const [socket, setSocket] = useState(null);
   const [gameState, setGameState] = useState('MENU'); 
@@ -45,6 +42,8 @@ export default function App() {
   const [screenSize, setScreenSize] = useState({ w: window.innerWidth, h: window.innerHeight });
   const [deathTimer, setDeathTimer] = useState(0);
 
+  // Refs voor game state en input
+  const gameStateRef = useRef(gameState);
   const canvasRef = useRef(null);
   const pos = useRef({ x: 1200, y: 900 });
   const vel = useRef({ x: 0, y: 0 });
@@ -55,16 +54,21 @@ export default function App() {
   const frameRef = useRef();
   const deathIntervalRef = useRef();
 
-  // Socket initialisatie
+  // Houd gameStateRef up-to-date zodat de socket listener de huidige status weet
   useEffect(() => {
-    const s = io("https://wanting-dimensions-animals-regulation.trycloudflare.com"); // Verbinding met de Pi via de huidige URL
+    gameStateRef.current = gameState;
+  }, [gameState]);
+
+  // 1. Socket Verbinding (Draait maar 1 keer!)
+  useEffect(() => {
+    const s = io(SERVER_URL);
     setSocket(s);
 
     s.on('lobbyUpdate', (data) => {
       setLobbyData(data);
       
-      // Overgang van Lobby naar Spel
-      if (data.status === 'PLAYING' && gameState === 'LOBBY') {
+      // Als de server zegt dat we spelen, en we zitten in de lobby: START!
+      if (data.status === 'PLAYING' && gameStateRef.current === 'LOBBY') {
         const myData = data.players[s.id];
         if (myData) {
           pos.current = { x: myData.x, y: myData.y };
@@ -73,12 +77,11 @@ export default function App() {
         }
       }
 
-      // Check winnaar
       if (data.winner) setGameState('WINNER');
 
-      // Check of ik geëlimineerd ben
-      if (gameState === 'PLAYING' && data.players[s.id]?.alive === false) {
-        startDeathSequence();
+      // Check of ik dood ben
+      if (gameStateRef.current === 'PLAYING' && data.players[s.id]?.alive === false) {
+        startDeathSequence(s); // Geef socket mee
       }
     });
 
@@ -91,9 +94,9 @@ export default function App() {
       s.disconnect();
       window.removeEventListener('resize', handleResize);
     };
-  }, [gameState]);
+  }, []); // Lege array = maar 1 keer uitvoeren
 
-  // Game Loop
+  // 2. Game Loop
   useEffect(() => {
     if (gameState !== 'PLAYING') return;
 
@@ -107,16 +110,18 @@ export default function App() {
     return () => cancelAnimationFrame(frameRef.current);
   }, [gameState, lobbyData, screenSize]);
 
-  const startDeathSequence = () => {
-    if (gameState === 'DEAD') return;
+  const startDeathSequence = (currentSocket) => {
+    if (gameStateRef.current === 'DEAD') return;
     setGameState('DEAD');
     setDeathTimer(5);
+    
     if (deathIntervalRef.current) clearInterval(deathIntervalRef.current);
+    
     deathIntervalRef.current = setInterval(() => {
       setDeathTimer(prev => {
         if (prev <= 1) {
           clearInterval(deathIntervalRef.current);
-          socket.emit('respawn');
+          currentSocket.emit('respawn');
           setGameState('PLAYING');
           return 0;
         }
@@ -127,20 +132,19 @@ export default function App() {
 
   const updatePhysics = () => {
     if (!socket || !lobbyData) return;
-
+    // ... (rest van physics code identiek aan voorheen, maar let op dat je 'pos' en 'vel' correct gebruikt)
+    // Ik neem de physics code exact over van je input
     const centerX = screenSize.w / 2;
     const centerY = screenSize.h / 2;
     const dx = mousePosScreen.current.x - centerX;
     const dy = mousePosScreen.current.y - centerY;
     const dist = Math.sqrt(dx*dx + dy*dy);
 
-    // Beweging richting muis (precies zoals je Firebase versie)
     if (dist > MOUSE_DEADZONE) {
       vel.current.x += (dx / dist) * ACCELERATION;
       vel.current.y += (dy / dist) * ACCELERATION;
     }
 
-    // Dash
     if (keysPressed.current['Shift'] && Date.now() - lastDashTime.current > DASH_COOLDOWN) {
       const normX = dist > 0 ? dx / dist : 1;
       const normY = dist > 0 ? dy / dist : 0;
@@ -164,11 +168,9 @@ export default function App() {
     let nextY = pos.current.y + vel.current.y;
     const r = 20;
 
-    // Map grenzen
     if (nextX < r) nextX = r; if (nextX > MAP_WIDTH - r) nextX = MAP_WIDTH - r;
     if (nextY < r) nextY = r; if (nextY > MAP_HEIGHT - r) nextY = MAP_HEIGHT - r;
 
-    // Obstakel collisies
     let hitX = false;
     for (let obs of OBSTACLES) {
       if (nextX + r > obs.x && nextX - r < obs.x + obs.w && pos.current.y + r > obs.y && pos.current.y - r < obs.y + obs.h) hitX = true;
@@ -181,7 +183,6 @@ export default function App() {
     }
     if (!hitY) pos.current.y = nextY; else vel.current.y *= 0.5;
 
-    // Schieten (Spatie)
     if (keysPressed.current[' '] && Date.now() - lastShotTime.current > RELOAD_TIME) {
       const camX = pos.current.x - screenSize.w / 2;
       const camY = pos.current.y - screenSize.h / 2;
@@ -203,7 +204,6 @@ export default function App() {
       }
     }
 
-    // Positie verzenden
     socket.emit('move', { x: pos.current.x, y: pos.current.y });
   };
 
@@ -214,14 +214,12 @@ export default function App() {
     const camX = pos.current.x - screenSize.w / 2;
     const camY = pos.current.y - screenSize.h / 2;
 
-    // Achtergrond
     ctx.fillStyle = '#0f172a';
     ctx.fillRect(0, 0, screenSize.w, screenSize.h);
 
     ctx.save();
     ctx.translate(-camX, -camY);
 
-    // Raster
     ctx.strokeStyle = '#1e293b';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -229,7 +227,6 @@ export default function App() {
     for (let y = 0; y <= MAP_HEIGHT; y += 100) { ctx.moveTo(0, y); ctx.lineTo(MAP_WIDTH, y); }
     ctx.stroke();
 
-    // Obstakels
     ctx.fillStyle = '#334155';
     ctx.strokeStyle = '#64748b';
     ctx.lineWidth = 4;
@@ -238,7 +235,6 @@ export default function App() {
       ctx.strokeRect(o.x, o.y, o.w, o.h);
     });
 
-    // Kogels (met gloed effect)
     const now = Date.now();
     ctx.fillStyle = '#fbbf24';
     ctx.shadowBlur = 10;
@@ -255,27 +251,21 @@ export default function App() {
     });
     ctx.shadowBlur = 0;
 
-    // Spelers tekenen
     Object.entries(lobbyData?.players || {}).forEach(([id, p]) => {
       if (!p.alive) return;
       const isMe = id === socket.id;
-      
-      // Kleur en schaduw voor jezelf
       ctx.fillStyle = isMe ? '#3b82f6' : '#ef4444';
       if (isMe) {
         ctx.shadowBlur = 20;
         ctx.shadowColor = 'rgba(59, 130, 246, 0.5)';
       }
-      
       ctx.beginPath();
-      // Gebruik lokale positie voor jezelf voor vloeiende beweging
       const drawX = isMe ? pos.current.x : p.x;
       const drawY = isMe ? pos.current.y : p.y;
       ctx.arc(drawX, drawY, 20, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
 
-      // Namen en scores
       ctx.fillStyle = '#fff';
       ctx.font = 'bold 12px sans-serif';
       ctx.textAlign = 'center';
@@ -288,7 +278,6 @@ export default function App() {
       }
     });
 
-    // Reload en Dash balkjes bij de speler
     const timeSinceShot = now - lastShotTime.current;
     if (timeSinceShot < RELOAD_TIME) {
       const pct = timeSinceShot / RELOAD_TIME;
@@ -306,10 +295,8 @@ export default function App() {
       ctx.fillStyle = '#3b82f6';
       ctx.fillRect(pos.current.x - 20, pos.current.y + 36, 40 * pct, 4);
     }
-
     ctx.restore();
 
-    // Minimap
     const mmScale = 0.08;
     const mmW = MAP_WIDTH * mmScale;
     const mmH = MAP_HEIGHT * mmScale;
@@ -347,7 +334,8 @@ export default function App() {
     socket.emit('startMatch');
   };
 
-  // --- UI SCHERMEN ---
+  // --- UI ---
+  // (Identiek aan je input, maar check 'join' button en 'startMatch' button)
   if (gameState === 'MENU') return (
     <div className="w-full h-screen bg-slate-950 flex items-center justify-center text-white font-sans overflow-hidden">
       <div className="bg-slate-900 p-12 rounded-[3rem] shadow-2xl w-full max-w-sm border-b-8 border-emerald-500/20 text-center">
@@ -380,6 +368,7 @@ export default function App() {
     </div>
   );
 
+  // ... (rest van UI voor WINNER en return canvas)
   if (gameState === 'WINNER') return (
     <div className="fixed inset-0 bg-slate-950 flex items-center justify-center z-[200] text-white">
         <div className="text-center">
@@ -399,8 +388,6 @@ export default function App() {
         height={screenSize.h}
         onMouseMove={e => mousePosScreen.current = { x: e.clientX, y: e.clientY }}
       />
-      
-      {/* Scorebord */}
       <div className="absolute top-4 left-4 bg-black/40 p-4 rounded-xl backdrop-blur-sm border border-white/10 text-white pointer-events-none select-none">
          <h3 className="font-bold text-xs uppercase text-slate-400 mb-2 italic">Top Spelers</h3>
          {Object.values(lobbyData?.players || {})
@@ -413,7 +400,6 @@ export default function App() {
          ))}
       </div>
 
-      {/* Death Screen */}
       {gameState === 'DEAD' && (
         <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-[100] text-white">
           <div className="text-center">
