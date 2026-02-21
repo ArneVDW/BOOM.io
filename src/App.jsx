@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { Skull, Crosshair, Trophy, Play } from 'lucide-react';
+import './index.css';
 
 // --- CONFIGURATIE ---
 const SERVER_URL = "https://chapters-episodes-publications-jewish.trycloudflare.com";
