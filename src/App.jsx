@@ -3,7 +3,7 @@ import { io } from 'socket.io-client';
 import { Skull, Crosshair, Trophy, Play, Map as MapIcon, Save, Trash2, ArrowLeft, Download, Upload } from 'lucide-react';
 
 // --- CONFIGURATIE ---
-const SERVER_URL = "https://managing-pilot-chips-hepatitis.trycloudflare.com";
+const SERVER_URL = "https://booth-here-nodes-arms.trycloudflare.com";
 
 // --- GAME BALANS ---
 const ACCELERATION = 0.4; 
