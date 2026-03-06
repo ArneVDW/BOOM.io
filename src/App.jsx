@@ -3,7 +3,7 @@ import { io } from 'socket.io-client';
 import { Skull, Crosshair, Trophy, Play, Map as MapIcon, Save, Trash2, ArrowLeft, Download, Upload } from 'lucide-react';
 
 // --- CONFIGURATIE ---
-const SERVER_URL = "https://assessment-because-specials-literature.trycloudflare.com";
+const SERVER_URL = "https://scholars-hazardous-judy-tennis.trycloudflare.com";
 
 // --- GAME BALANS ---
 const ACCELERATION = 0.4; 
