@@ -3,24 +3,24 @@ import { io } from 'socket.io-client';
 import { Skull, Crosshair, Trophy, Play, Map as MapIcon, Save, Trash2, ArrowLeft, Download, Upload } from 'lucide-react';
 
 // --- CONFIGURATIE ---
-const SERVER_URL = "https://determination-alberta-specific-childrens.trycloudflare.com"; // zet hier je tunnel-URL of laat leeg voor window.location.origin
+const SERVER_URL = "https://determination-alberta-specific-childrens.trycloudflare.com";
 
 // --- GAME BALANS ---
-const ACCELERATION = 0.4;
+const ACCELERATION = 0.4; 
 const FRICTION = 0.92;
-const MAX_SPEED = 5;
-const DASH_SPEED = 18;
+const MAX_SPEED = 5; 
+const DASH_SPEED = 18; 
 const DASH_COOLDOWN = 5000;
-const BULLET_SPEED = 35;
+const BULLET_SPEED = 35; // Flink verhoogd zodat kogels sneller zijn dan dashes!
 const RELOAD_TIME = 400;
-const MAP_WIDTH = 2400;
-const MAP_HEIGHT = 1800;
-const BULLET_LIFESPAN = 1500;
-const WIN_SCORE = 5;
-const MOUSE_DEADZONE = 60;
+const MAP_WIDTH = 2400;  
+const MAP_HEIGHT = 1800; 
+const BULLET_LIFESPAN = 1500; 
+const WIN_SCORE = 5; // Winnaar bij 5 kills
+const MOUSE_DEADZONE = 60; 
 
 const DEFAULT_OBSTACLES = [
-  { x: 1000, y: 700, w: 400, h: 400 },
+  { x: 1000, y: 700, w: 400, h: 400 }, 
   { x: 400, y: 400, w: 200, h: 50 },
   { x: 1800, y: 400, w: 200, h: 50 },
   { x: 400, y: 1350, w: 200, h: 50 },
@@ -33,13 +33,15 @@ const DEFAULT_OBSTACLES = [
   { x: 1600, y: 1400, w: 100, h: 100 },
 ];
 
+// Helper om te checken of een punt in een obstakel zit (nu afhankelijk van actieve map)
 function isInObstacle(x, y, mapData, margin = 40) {
-  return mapData.some(o =>
+  return mapData.some(o => 
     x > o.x - margin && x < o.x + o.w + margin &&
     y > o.y - margin && y < o.y + o.h + margin
   );
 }
 
+// Zoek een veilige spawnplek
 function findSafeSpawn(mapData) {
   let attempts = 0;
   while (attempts < 100) {
@@ -48,7 +50,7 @@ function findSafeSpawn(mapData) {
     if (!isInObstacle(x, y, mapData)) return { x, y };
     attempts++;
   }
-  return { x: 1200, y: 900 };
+  return { x: 1200, y: 900 }; // Fallback
 }
 
 export default function App() {
@@ -61,66 +63,66 @@ export default function App() {
   const [deathTimer, setDeathTimer] = useState(0);
   const [winnerName, setWinnerName] = useState('');
 
+  // Map Editor State
   const [activeMap, setActiveMap] = useState(() => {
     const saved = localStorage.getItem('customMap');
     return saved ? JSON.parse(saved) : DEFAULT_OBSTACLES;
   });
   const [isDrawing, setIsDrawing] = useState(false);
-  const [drawStart, setDrawStart] = useState({ x: 0, y: 0 });
-  const [drawCurrent, setDrawCurrent] = useState({ x: 0, y: 0 });
+  const [drawStart, setDrawStart] = useState({x: 0, y: 0});
+  const [drawCurrent, setDrawCurrent] = useState({x: 0, y: 0});
 
-  // refs
+  // Refs voor game state en input (zorgt voor vloeiende framerate zonder React re-renders)
   const gameStateRef = useRef(gameState);
   const activeMapRef = useRef(activeMap);
-  const lobbyDataRef = useRef(null);
+  const lobbyDataRef = useRef(null); // Directe ref voor canvas om schokken tegen te gaan
   const canvasRef = useRef(null);
   const pos = useRef({ x: 1200, y: 900 });
   const vel = useRef({ x: 0, y: 0 });
-  const mousePosScreen = useRef({ x: 0, y: 0 });
+  const mousePosScreen = useRef({ x: 0, y: 0 }); 
   const keysPressed = useRef({});
   const lastShotTime = useRef(0);
   const lastDashTime = useRef(0);
   const frameRef = useRef();
   const deathIntervalRef = useRef();
   const lastRespawnTime = useRef(0);
-  const editorCam = useRef({ x: 0, y: 0 });
-  const bgCacheRef = useRef(null);
-  const lastMoveEmitTime = useRef(0);
-  const MOVE_EMIT_INTERVAL = 50; // ms ~20Hz
-  const activeMapDirty = useRef(false);
-  const isPointerDownRef = useRef(false);
-  const activeMapRefStable = useRef(activeMap);
+  const editorCam = useRef({x: 0, y: 0});
 
   useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
-  useEffect(() => { activeMapRef.current = activeMap; activeMapRefStable.current = activeMap; activeMapDirty.current = true; }, [activeMap]);
+  useEffect(() => { activeMapRef.current = activeMap; }, [activeMap]);
 
-  // --- Socket init + listeners with cleanup ---
+  // 1. Socket Verbinding
   useEffect(() => {
-    const s = io(SERVER_URL || window.location.origin, { transports: ['websocket'] });
+    const s = io(SERVER_URL);
     setSocket(s);
 
-    const onLobbyUpdate = (data) => {
-      setLobbyData(data);
-      lobbyDataRef.current = data;
-
+    s.on('lobbyUpdate', (data) => {
+      setLobbyData(data); // Voor UI (Scoreboard)
+      lobbyDataRef.current = data; // Voor vloeiende Canvas rendering
+      
+      // Check Winnaar (Zodra iemand 5 kills heeft)
       const winningPlayerId = Object.keys(data.players || {}).find(id => data.players[id].score >= WIN_SCORE);
       if (winningPlayerId || data.winner) {
-        const wName = data.winner || data.players[winningPlayerId]?.name || 'Onbekend';
-        setWinnerName(wName);
-        setGameState('WINNER');
-        return;
+          const wName = data.winner || data.players[winningPlayerId].name;
+          setWinnerName(wName);
+          setGameState('WINNER');
+          return; // Stop verdere verwerking
       }
 
+      // START SPEL LOGICA
       if (data.status === 'PLAYING' && gameStateRef.current !== 'WINNER') {
+        
+        // Initiele Spawn
         if (gameStateRef.current === 'LOBBY') {
-          const myData = data.players?.[s.id];
-          let startX = myData?.x ?? 1200;
-          let startY = myData?.y ?? 900;
+          const myData = data.players[s.id];
+          let startX = myData ? myData.x : 1200;
+          let startY = myData ? myData.y : 900;
 
           if (isInObstacle(startX, startY, activeMapRef.current)) {
-            const safe = findSafeSpawn(activeMapRef.current);
-            startX = safe.x; startY = safe.y;
-            s.emit('move', { x: startX, y: startY });
+             const safe = findSafeSpawn(activeMapRef.current);
+             startX = safe.x;
+             startY = safe.y;
+             s.emit('move', { x: startX, y: startY });
           }
 
           pos.current = { x: startX, y: startY };
@@ -128,103 +130,28 @@ export default function App() {
           setGameState('PLAYING');
         }
 
-        const myData = data.players?.[s.id];
+        // Check voor eliminatie
+        const myData = data.players[s.id];
         if (gameStateRef.current === 'PLAYING' && myData?.alive === false) {
           if (Date.now() - lastRespawnTime.current > 2000) {
             startDeathSequence(s);
           }
         }
       }
-    };
-
-    s.on('lobbyUpdate', onLobbyUpdate);
+    });
 
     const handleResize = () => setScreenSize({ w: window.innerWidth, h: window.innerHeight });
-    const handleKeyDown = (e) => {
-      const k = e.key.toLowerCase();
-      keysPressed.current[k] = true;
-      if (k === ' ') e.preventDefault(); // voorkom scroll
-      // editor shortcuts
-      if (gameStateRef.current === 'EDITOR') {
-        if ((k === 'z') && (e.ctrlKey || e.metaKey)) {
-          setActiveMap(prev => {
-            const next = prev.slice(0, -1);
-            localStorage.setItem('customMap', JSON.stringify(next));
-            return next;
-          });
-        }
-        if (k === 'delete' || k === 'backspace') {
-          setActiveMap(prev => {
-            const next = prev.slice(0, -1);
-            localStorage.setItem('customMap', JSON.stringify(next));
-            return next;
-          });
-        }
-      }
-    };
-    const handleKeyUp = (e) => { keysPressed.current[e.key.toLowerCase()] = false; };
-
     window.addEventListener('resize', handleResize);
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('keydown', (e) => keysPressed.current[e.key.toLowerCase()] = true);
+    window.addEventListener('keyup', (e) => keysPressed.current[e.key.toLowerCase()] = false);
 
     return () => {
-      s.off('lobbyUpdate', onLobbyUpdate);
       s.disconnect();
       window.removeEventListener('resize', handleResize);
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); 
 
-  // --- Canvas DPI sizing ---
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.floor(screenSize.w * dpr);
-    canvas.height = Math.floor(screenSize.h * dpr);
-    canvas.style.width = `${screenSize.w}px`;
-    canvas.style.height = `${screenSize.h}px`;
-    const ctx = canvas.getContext('2d');
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }, [screenSize]);
-
-  // --- Background cache (offscreen) ---
-  useEffect(() => {
-    // rebuild cache when activeMap changes
-    const rebuild = () => {
-      const off = document.createElement('canvas');
-      off.width = MAP_WIDTH;
-      off.height = MAP_HEIGHT;
-      const octx = off.getContext('2d');
-
-      octx.fillStyle = '#0f172a';
-      octx.fillRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
-
-      octx.strokeStyle = '#1e293b';
-      octx.lineWidth = 2;
-      octx.beginPath();
-      for (let x = 0; x <= MAP_WIDTH; x += 100) { octx.moveTo(x, 0); octx.lineTo(x, MAP_HEIGHT); }
-      for (let y = 0; y <= MAP_HEIGHT; y += 100) { octx.moveTo(0, y); octx.lineTo(MAP_WIDTH, y); }
-      octx.stroke();
-
-      octx.fillStyle = '#334155';
-      octx.strokeStyle = '#64748b';
-      octx.lineWidth = 4;
-      (activeMapRefStable.current || []).forEach(o => {
-        octx.fillRect(o.x, o.y, o.w, o.h);
-        octx.strokeRect(o.x, o.y, o.w, o.h);
-      });
-
-      bgCacheRef.current = off;
-      activeMapDirty.current = false;
-    };
-
-    rebuild();
-  }, [activeMap]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // --- Game loop ---
+  // 2. Game Loop & Editor Loop
   useEffect(() => {
     if (gameState === 'MENU' || gameState === 'LOBBY' || gameState === 'WINNER') return;
 
@@ -233,7 +160,7 @@ export default function App() {
         updatePhysics();
         drawGame();
       } else if (gameStateRef.current === 'DEAD') {
-        drawGame();
+        drawGame(); // Blijf de achtergrond tekenen als je dood bent
       } else if (gameStateRef.current === 'EDITOR') {
         updateEditorPhysics();
         drawEditor();
@@ -243,31 +170,25 @@ export default function App() {
 
     frameRef.current = requestAnimationFrame(render);
     return () => cancelAnimationFrame(frameRef.current);
-  }, [gameState, screenSize]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [gameState, screenSize, activeMap]);
 
-  // --- Death sequence ---
   const startDeathSequence = (currentSocket) => {
     if (gameStateRef.current === 'DEAD') return;
     setGameState('DEAD');
     setDeathTimer(5);
-
-    if (deathIntervalRef.current) {
-      clearInterval(deathIntervalRef.current);
-      deathIntervalRef.current = null;
-    }
-
+    
+    if (deathIntervalRef.current) clearInterval(deathIntervalRef.current);
+    
     deathIntervalRef.current = setInterval(() => {
       setDeathTimer(prev => {
         if (prev <= 1) {
           clearInterval(deathIntervalRef.current);
-          deathIntervalRef.current = null;
-
+          
           const safe = findSafeSpawn(activeMapRef.current);
           pos.current = safe;
-          if (currentSocket && currentSocket.connected) {
-            currentSocket.emit('move', safe);
-            currentSocket.emit('respawn');
-          }
+          currentSocket.emit('move', safe);
+          currentSocket.emit('respawn');
+          
           lastRespawnTime.current = Date.now();
           setGameState('PLAYING');
           return 0;
@@ -277,40 +198,30 @@ export default function App() {
     }, 1000);
   };
 
-  // --- Shooting ---
   const performShoot = () => {
-    if (gameStateRef.current !== 'PLAYING') return;
-    if (Date.now() - lastShotTime.current < RELOAD_TIME) return;
-    if (!socket || !socket.connected) return;
+      if (gameStateRef.current !== 'PLAYING') return;
+      if (Date.now() - lastShotTime.current < RELOAD_TIME) return;
 
-    const camX = pos.current.x - screenSize.w / 2;
-    const camY = pos.current.y - screenSize.h / 2;
-    const worldMouseX = mousePosScreen.current.x + camX;
-    const worldMouseY = mousePosScreen.current.y + camY;
-
-    let bdx = worldMouseX - pos.current.x;
-    let bdy = worldMouseY - pos.current.y;
-    let bdist = Math.hypot(bdx, bdy);
-
-    if (bdist < 1) {
-      bdx = 1; bdy = 0; bdist = 1;
-    }
-
-    const vx = (bdx / bdist) * BULLET_SPEED;
-    const vy = (bdy / bdist) * BULLET_SPEED;
-
-    socket.emit('shoot', {
-      x: pos.current.x,
-      y: pos.current.y,
-      vx,
-      vy,
-      t: Date.now()
-    });
-
-    lastShotTime.current = Date.now();
+      const camX = pos.current.x - screenSize.w / 2;
+      const camY = pos.current.y - screenSize.h / 2;
+      const worldMouseX = mousePosScreen.current.x + camX;
+      const worldMouseY = mousePosScreen.current.y + camY;
+      
+      const bdx = worldMouseX - pos.current.x;
+      const bdy = worldMouseY - pos.current.y;
+      const bdist = Math.sqrt(bdx*bdx + bdy*bdy);
+      
+      if (bdist > 1) {
+        socket.emit('shoot', {
+          x: pos.current.x,
+          y: pos.current.y,
+          vx: (bdx / bdist) * BULLET_SPEED,
+          vy: (bdy / bdist) * BULLET_SPEED
+        });
+        lastShotTime.current = Date.now();
+      }
   };
 
-  // --- Physics update ---
   const updatePhysics = () => {
     if (!socket || !lobbyDataRef.current) return;
 
@@ -318,7 +229,7 @@ export default function App() {
     const centerY = screenSize.h / 2;
     const dx = mousePosScreen.current.x - centerX;
     const dy = mousePosScreen.current.y - centerY;
-    const dist = Math.hypot(dx, dy);
+    const dist = Math.sqrt(dx*dx + dy*dy);
 
     if (dist > MOUSE_DEADZONE) {
       vel.current.x += (dx / dist) * ACCELERATION;
@@ -326,20 +237,17 @@ export default function App() {
     }
 
     if (keysPressed.current['shift'] && Date.now() - lastDashTime.current > DASH_COOLDOWN) {
-      const norm = dist > 0 ? 1 / dist : 0;
-      const normX = dx * norm;
-      const normY = dy * norm;
-      const fx = dist > 0 ? normX : 1;
-      const fy = dist > 0 ? normY : 0;
-      vel.current.x += fx * DASH_SPEED;
-      vel.current.y += fy * DASH_SPEED;
+      const normX = dist > 0 ? dx / dist : 1;
+      const normY = dist > 0 ? dy / dist : 0;
+      vel.current.x += normX * DASH_SPEED;
+      vel.current.y += normY * DASH_SPEED;
       lastDashTime.current = Date.now();
     }
 
     vel.current.x *= FRICTION;
     vel.current.y *= FRICTION;
 
-    const speed = Math.hypot(vel.current.x, vel.current.y);
+    const speed = Math.sqrt(vel.current.x**2 + vel.current.y**2);
     const cap = (Date.now() - lastDashTime.current < 300) ? DASH_SPEED : MAX_SPEED;
     if (speed > cap) {
       vel.current.x = (vel.current.x / speed) * cap;
@@ -353,29 +261,24 @@ export default function App() {
     if (nextX < r) nextX = r; if (nextX > MAP_WIDTH - r) nextX = MAP_WIDTH - r;
     if (nextY < r) nextY = r; if (nextY > MAP_HEIGHT - r) nextY = MAP_HEIGHT - r;
 
+    // Botsen met actieve map
     if (!isInObstacle(nextX, pos.current.y, activeMapRef.current, r)) {
-      pos.current.x = nextX;
+        pos.current.x = nextX;
     } else {
-      vel.current.x *= 0.5;
+        vel.current.x *= 0.5;
     }
 
     if (!isInObstacle(pos.current.x, nextY, activeMapRef.current, r)) {
-      pos.current.y = nextY;
+        pos.current.y = nextY;
     } else {
-      vel.current.y *= 0.5;
+        vel.current.y *= 0.5;
     }
 
     if (keysPressed.current[' ']) performShoot();
 
-    // Throttled move emit
-    const now = Date.now();
-    if (socket && socket.connected && now - lastMoveEmitTime.current > MOVE_EMIT_INTERVAL) {
-      socket.emit('move', { x: pos.current.x, y: pos.current.y });
-      lastMoveEmitTime.current = now;
-    }
+    socket.emit('move', { x: pos.current.x, y: pos.current.y });
   };
 
-  // --- Drawing ---
   const drawGame = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -383,37 +286,44 @@ export default function App() {
     const camX = pos.current.x - screenSize.w / 2;
     const camY = pos.current.y - screenSize.h / 2;
 
-    // draw background from cache
-    if (bgCacheRef.current) {
-      ctx.drawImage(bgCacheRef.current, camX, camY, screenSize.w, screenSize.h, 0, 0, screenSize.w, screenSize.h);
-    } else {
-      ctx.fillStyle = '#0f172a';
-      ctx.fillRect(0, 0, screenSize.w, screenSize.h);
-    }
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, screenSize.w, screenSize.h);
 
     ctx.save();
     ctx.translate(-camX, -camY);
 
-    // bullets and players use lobbyDataRef safely
-    const lobby = lobbyDataRef.current || { bullets: [], players: {} };
+    // Raster
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let x = 0; x <= MAP_WIDTH; x += 100) { ctx.moveTo(x, 0); ctx.lineTo(x, MAP_HEIGHT); }
+    for (let y = 0; y <= MAP_HEIGHT; y += 100) { ctx.moveTo(0, y); ctx.lineTo(MAP_WIDTH, y); }
+    ctx.stroke();
 
-    // Kogels
+    // Actieve Map Obstakels
+    ctx.fillStyle = '#334155';
+    ctx.strokeStyle = '#64748b';
+    ctx.lineWidth = 4;
+    activeMapRef.current.forEach(o => {
+      ctx.fillRect(o.x, o.y, o.w, o.h);
+      ctx.strokeRect(o.x, o.y, o.w, o.h);
+    });
+
+    // Kogels (via lobbyDataRef voor minder schokken)
     ctx.fillStyle = '#fbbf24';
     ctx.shadowBlur = 10;
     ctx.shadowColor = '#fbbf24';
-    for (let i = 0; i < (lobby.bullets || []).length; i++) {
-      const b = lobby.bullets[i];
+    lobbyDataRef.current?.bullets?.forEach(b => {
       ctx.beginPath();
-      ctx.arc(b.x, b.y, 5, 0, Math.PI * 2);
+      ctx.arc(b.x, b.y, 5, 0, Math.PI * 2); 
       ctx.fill();
-    }
+    });
     ctx.shadowBlur = 0;
 
     // Spelers
-    Object.entries(lobby.players || {}).forEach(([id, p]) => {
+    Object.entries(lobbyDataRef.current?.players || {}).forEach(([id, p]) => {
       if (!p.alive) return;
-      const isMe = id === (socket?.id);
-      ctx.save();
+      const isMe = id === socket.id;
       ctx.fillStyle = isMe ? '#3b82f6' : '#ef4444';
       if (isMe) {
         ctx.shadowBlur = 20;
@@ -424,13 +334,13 @@ export default function App() {
       const drawY = isMe ? pos.current.y : p.y;
       ctx.arc(drawX, drawY, 20, 0, Math.PI * 2);
       ctx.fill();
-      ctx.restore();
+      ctx.shadowBlur = 0;
 
       ctx.fillStyle = '#fff';
       ctx.font = 'bold 12px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(isMe ? "JIJ" : p.name, drawX, drawY - 30);
-
+      
       if (p.score > 0) {
         ctx.font = '10px sans-serif';
         ctx.fillStyle = '#fbbf24';
@@ -438,7 +348,7 @@ export default function App() {
       }
     });
 
-    // HUD balkjes (relative to world pos)
+    // HUD balkjes
     const now = Date.now();
     const timeSinceShot = now - lastShotTime.current;
     if (timeSinceShot < RELOAD_TIME && gameStateRef.current === 'PLAYING') {
@@ -457,14 +367,13 @@ export default function App() {
       ctx.fillStyle = '#3b82f6';
       ctx.fillRect(pos.current.x - 20, pos.current.y + 36, 40 * pct, 4);
     }
-
     ctx.restore();
 
-    // Crosshair (screen-space)
+    // Crosshair
     if (gameStateRef.current === 'PLAYING') {
       const mx = mousePosScreen.current.x;
       const my = mousePosScreen.current.y;
-      ctx.strokeStyle = '#10b981';
+      ctx.strokeStyle = '#10b981'; 
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(mx, my, 12, 0, Math.PI * 2);
@@ -486,19 +395,19 @@ export default function App() {
     ctx.strokeStyle = '#475569';
     ctx.lineWidth = 2;
     ctx.strokeRect(mmX, mmY, mmW, mmH);
-
-    Object.entries((lobby.players || {})).forEach(([id, p]) => {
+    
+    Object.entries(lobbyDataRef.current?.players || {}).forEach(([id, p]) => {
       if (!p.alive) return;
-      ctx.fillStyle = id === (socket?.id) ? '#3b82f6' : '#ef4444';
+      ctx.fillStyle = id === socket.id ? '#3b82f6' : '#ef4444';
       ctx.beginPath();
-      const px = id === (socket?.id) ? pos.current.x : p.x;
-      const py = id === (socket?.id) ? pos.current.y : p.y;
+      const px = id === socket.id ? pos.current.x : p.x;
+      const py = id === socket.id ? pos.current.y : p.y;
       ctx.arc(mmX + px * mmScale, mmY + py * mmScale, 3, 0, Math.PI * 2);
       ctx.fill();
     });
   };
 
-  // --- Editor physics & draw ---
+  // --- MAP EDITOR LOGICA ---
   const updateEditorPhysics = () => {
     const speed = 15;
     if (keysPressed.current['w']) editorCam.current.y -= speed;
@@ -538,7 +447,7 @@ export default function App() {
     ctx.fillStyle = '#334155';
     ctx.strokeStyle = '#64748b';
     ctx.lineWidth = 4;
-    (activeMapRef.current || []).forEach(o => {
+    activeMapRef.current.forEach(o => {
       ctx.fillRect(o.x, o.y, o.w, o.h);
       ctx.strokeRect(o.x, o.y, o.w, o.h);
     });
@@ -554,7 +463,7 @@ export default function App() {
       ctx.fillRect(x, y, w, h);
       ctx.strokeRect(x, y, w, h);
     }
-
+    
     ctx.restore();
 
     // Editor UI Hint
@@ -564,82 +473,12 @@ export default function App() {
     ctx.fillText("WASD = Camera bewegen  |  Muis Ingedrukt = Blok Tekenen", screenSize.w / 2, screenSize.h - 30);
   };
 
-  // --- Canvas pointer helpers ---
-  function getCanvasWorldPos(e, cam) {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    const clientX = (e.touches ? e.touches[0].clientX : e.clientX);
-    const clientY = (e.touches ? e.touches[0].clientY : e.clientY);
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const x = (clientX - rect.left) * scaleX + cam.x;
-    const y = (clientY - rect.top) * scaleY + cam.y;
-    return { x, y };
-  }
-
-  // pointer event attachment
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const onPointerDown = (e) => {
-      if (gameStateRef.current !== 'EDITOR') return;
-      const posWorld = getCanvasWorldPos(e, editorCam.current);
-      setDrawStart(posWorld);
-      setDrawCurrent(posWorld);
-      setIsDrawing(true);
-      isPointerDownRef.current = true;
-      e.preventDefault();
-    };
-    const onPointerMove = (e) => {
-      if (gameStateRef.current !== 'EDITOR' && !isPointerDownRef.current) {
-        mousePosScreen.current = { x: e.clientX, y: e.clientY };
-        return;
-      }
-      if (!isPointerDownRef.current) return;
-      const posWorld = getCanvasWorldPos(e, editorCam.current);
-      setDrawCurrent(posWorld);
-      e.preventDefault();
-    };
-    const onPointerUp = (e) => {
-      if (gameStateRef.current !== 'EDITOR' || !isPointerDownRef.current) {
-        isPointerDownRef.current = false;
-        setIsDrawing(false);
-        return;
-      }
-      isPointerDownRef.current = false;
-      setIsDrawing(false);
-      handleEditorMouseUp();
-      e.preventDefault();
-    };
-
-    canvas.addEventListener('pointerdown', onPointerDown);
-    window.addEventListener('pointermove', onPointerMove);
-    window.addEventListener('pointerup', onPointerUp);
-
-    // mouse move for aim when not in editor
-    const onMouseMoveAim = (e) => {
-      if (gameStateRef.current !== 'EDITOR') {
-        mousePosScreen.current = { x: e.clientX, y: e.clientY };
-      }
-    };
-    window.addEventListener('mousemove', onMouseMoveAim);
-
-    return () => {
-      canvas.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('pointermove', onPointerMove);
-      window.removeEventListener('pointerup', onPointerUp);
-      window.removeEventListener('mousemove', onMouseMoveAim);
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // --- Editor mouse handlers (legacy hooks kept for compatibility) ---
   const handleEditorMouseDown = (e) => {
     if (gameState !== 'EDITOR') return;
-    const p = getCanvasWorldPos(e, editorCam.current);
-    setDrawStart(p);
-    setDrawCurrent(p);
+    const x = e.clientX + editorCam.current.x;
+    const y = e.clientY + editorCam.current.y;
+    setDrawStart({x, y});
+    setDrawCurrent({x, y});
     setIsDrawing(true);
   };
 
@@ -649,79 +488,64 @@ export default function App() {
       return;
     }
     if (isDrawing) {
-      const p = getCanvasWorldPos(e, editorCam.current);
-      setDrawCurrent(p);
-    }
-  };
-
-  const handleEditorMouseUp = () => {
-    if (gameStateRef.current !== 'EDITOR' || !isDrawing) return;
-    setIsDrawing(false);
-
-    const start = drawStart;
-    const current = drawCurrent;
-    const x = Math.max(0, Math.min(start.x, current.x));
-    const y = Math.max(0, Math.min(start.y, current.y));
-    const w = Math.abs(current.x - start.x);
-    const h = Math.abs(current.y - start.y);
-
-    const clampedW = Math.min(w, MAP_WIDTH - x);
-    const clampedH = Math.min(h, MAP_HEIGHT - y);
-
-    if (clampedW > 20 && clampedH > 20) {
-      setActiveMap(prev => {
-        const next = [...prev, { x, y, w: clampedW, h: clampedH }];
-        localStorage.setItem('customMap', JSON.stringify(next));
-        return next;
+      setDrawCurrent({
+        x: e.clientX + editorCam.current.x,
+        y: e.clientY + editorCam.current.y
       });
     }
   };
 
+  const handleEditorMouseUp = () => {
+    if (gameState !== 'EDITOR' || !isDrawing) return;
+    setIsDrawing(false);
+    
+    const x = Math.min(drawStart.x, drawCurrent.x);
+    const y = Math.min(drawStart.y, drawCurrent.y);
+    const w = Math.abs(drawCurrent.x - drawStart.x);
+    const h = Math.abs(drawCurrent.y - drawStart.y);
+    
+    // Voeg alleen toe als het blokje groot genoeg is
+    if (w > 20 && h > 20) {
+      setActiveMap(prev => [...prev, {x, y, w, h}]);
+    }
+  };
+
   const saveEditorMap = () => {
-    localStorage.setItem('customMap', JSON.stringify(activeMapRef.current || activeMap));
+    localStorage.setItem('customMap', JSON.stringify(activeMap));
     setGameState('MENU');
   };
 
-  const exportMapCode = async () => {
-    try {
-      const code = btoa(JSON.stringify(activeMapRef.current || activeMap));
-      await navigator.clipboard.writeText(code);
-      alert('Map Code gekopieerd naar je klembord!');
-    } catch (err) {
-      console.error(err);
-      alert('Kon map niet kopiëren. Probeer opnieuw.');
-    }
+  const exportMapCode = () => {
+    const code = btoa(JSON.stringify(activeMap));
+    navigator.clipboard.writeText(code);
+    alert('Map Code gekopieerd naar je klembord! Deel deze met je vrienden.');
   };
 
   const importMapCode = () => {
     const code = prompt('Plak hier de Map Code van je vriend:');
-    if (!code) return;
-    try {
-      const decoded = JSON.parse(atob(code));
-      if (!Array.isArray(decoded) || !decoded.every(o => 'x' in o && 'y' in o && 'w' in o && 'h' in o)) {
-        throw new Error('Invalid format');
+    if (code) {
+      try {
+        const decoded = JSON.parse(atob(code));
+        setActiveMap(decoded);
+        localStorage.setItem('customMap', JSON.stringify(decoded));
+      } catch(e) {
+        alert('Ongeldige Map Code!');
       }
-      setActiveMap(decoded);
-      localStorage.setItem('customMap', JSON.stringify(decoded));
-    } catch (e) {
-      console.error(e);
-      alert('Ongeldige Map Code!');
     }
   };
 
-  // --- Lobby / match actions ---
+  // --- MENU & LOBBY FUNCTIES ---
   const join = () => {
     if (!playerName || !lobbyCode || !socket) return;
-    socket.emit('joinLobby', { lobbyCode: lobbyCode.toUpperCase(), playerName, customMap: activeMapRef.current || activeMap });
+    // Stuur de custom map mee naar de server!
+    socket.emit('joinLobby', { lobbyCode: lobbyCode.toUpperCase(), playerName, customMap: activeMap });
     setGameState('LOBBY');
   };
 
   const startMatch = () => {
-    if (!socket) return;
     socket.emit('startMatch');
   };
 
-  // --- UI render ---
   if (gameState === 'MENU') return (
     <div className="w-full h-screen bg-slate-950 flex items-center justify-center text-white font-sans overflow-hidden">
       <div className="bg-slate-900 p-12 rounded-[3rem] shadow-2xl w-full max-w-sm border-b-8 border-emerald-500/20 text-center">
@@ -730,7 +554,7 @@ export default function App() {
         <input className="w-full bg-slate-800 p-4 rounded-2xl mb-4 border border-slate-700 outline-none focus:border-emerald-500 text-white" placeholder="JOUW NAAM" value={playerName} onChange={e => setPlayerName(e.target.value)} />
         <input className="w-full bg-slate-800 p-4 rounded-2xl mb-8 border border-slate-700 outline-none focus:border-emerald-500 uppercase text-white font-bold" placeholder="LOBBY CODE" value={lobbyCode} onChange={e => setLobbyCode(e.target.value)} />
         <button onClick={join} className="w-full bg-emerald-500 py-5 rounded-2xl font-black text-xl hover:bg-emerald-400 text-slate-900 shadow-[0_6px_0_rgb(16,185,129)] active:translate-y-1 transition-all uppercase mb-6">Speel Nu</button>
-
+        
         <div className="border-t border-slate-800 pt-6 mt-2 flex flex-col gap-3">
           <button onClick={() => setGameState('EDITOR')} className="w-full bg-slate-800 py-4 rounded-2xl font-bold text-slate-300 hover:bg-slate-700 flex justify-center items-center gap-2 transition-colors">
             <MapIcon size={18} /> Map Editor
@@ -776,15 +600,17 @@ export default function App() {
 
   return (
     <div className="fixed inset-0 bg-black overflow-hidden cursor-none">
+      
+      {/* HUD OVERLAY VOOR EDITOR */}
       {gameState === 'EDITOR' && (
         <div className="absolute top-4 left-4 z-50 flex gap-4 cursor-default">
            <button onClick={saveEditorMap} className="bg-emerald-500 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-emerald-400 shadow-lg"><Save size={18}/> Opslaan & Terug</button>
-           <button onClick={() => { setActiveMap([]); localStorage.removeItem('customMap'); }} className="bg-rose-500 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-rose-400 shadow-lg"><Trash2 size={18}/> Wis Alles</button>
+           <button onClick={() => setActiveMap([])} className="bg-rose-500 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-rose-400 shadow-lg"><Trash2 size={18}/> Wis Alles</button>
            <button onClick={exportMapCode} className="bg-blue-500 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-blue-400 shadow-lg"><Upload size={18}/> Kopieer Map Code</button>
         </div>
       )}
 
-      <canvas
+      <canvas 
         ref={canvasRef}
         width={screenSize.w}
         height={screenSize.h}
@@ -792,7 +618,8 @@ export default function App() {
         onMouseDown={gameState === 'EDITOR' ? handleEditorMouseDown : performShoot}
         onMouseUp={handleEditorMouseUp}
       />
-
+      
+      {/* IN-GAME HUD */}
       {(gameState === 'PLAYING' || gameState === 'DEAD') && (
         <div className="absolute top-4 left-4 bg-black/40 p-4 rounded-xl backdrop-blur-sm border border-white/10 text-white pointer-events-none select-none z-10">
           <h3 className="font-bold text-xs uppercase text-slate-400 mb-2 italic">Top Spelers (Doel: {WIN_SCORE})</h3>
@@ -807,6 +634,7 @@ export default function App() {
         </div>
       )}
 
+      {/* DEATH SCREEN */}
       {gameState === 'DEAD' && (
         <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-[100] text-white">
           <div className="text-center">
@@ -820,6 +648,7 @@ export default function App() {
         </div>
       )}
 
+      {/* IN-GAME CONTROLS HINT */}
       {gameState === 'PLAYING' && (
         <div className="absolute bottom-4 left-4 text-white/50 font-sans text-xs pointer-events-none">
           KLIK = Schieten | SHIFT = Dash
