@@ -3,7 +3,7 @@ import { io } from 'socket.io-client';
 import { 
   Skull, Crosshair, Trophy, Play, Map as MapIcon, Save, 
   Trash2, ArrowLeft, Download, Upload, Globe, Heart, 
-  User, ChevronLeft, CloudUpload 
+  User, ChevronLeft, CloudUpload, Undo, Grid, Maximize
 } from 'lucide-react';
 
 // --- CONFIGURATIE ---
@@ -15,14 +15,13 @@ const FRICTION = 0.92;
 const MAX_SPEED = 5; 
 const DASH_SPEED = 18; 
 const DASH_COOLDOWN = 5000;
-const BULLET_SPEED = 35; // Flink verhoogd zodat kogels sneller zijn dan dashes!
+const BULLET_SPEED = 35; 
 const RELOAD_TIME = 400;
-const MAP_WIDTH = 2400;  
-const MAP_HEIGHT = 1800; 
 const BULLET_LIFESPAN = 1500; 
-const WIN_SCORE = 5; // Winnaar bij 5 kills
+const WIN_SCORE = 5; 
 const MOUSE_DEADZONE = 60; 
 
+// Standaard map blokken
 const DEFAULT_OBSTACLES = [
   { x: 1000, y: 700, w: 400, h: 400 }, 
   { x: 400, y: 400, w: 200, h: 50 },
@@ -30,14 +29,10 @@ const DEFAULT_OBSTACLES = [
   { x: 400, y: 1350, w: 200, h: 50 },
   { x: 1800, y: 1350, w: 200, h: 50 },
   { x: 200, y: 600, w: 50, h: 600 },
-  { x: 2150, y: 600, w: 50, h: 600 },
-  { x: 700, y: 300, w: 100, h: 100 },
-  { x: 1600, y: 300, w: 100, h: 100 },
-  { x: 700, y: 1400, w: 100, h: 100 },
-  { x: 1600, y: 1400, w: 100, h: 100 },
+  { x: 2150, y: 600, w: 50, h: 600 }
 ];
 
-// Helper om te checken of een punt in een obstakel zit (nu afhankelijk van actieve map)
+// Helper: Check botsing
 function isInObstacle(x, y, mapData, margin = 40) {
   return mapData.some(o => 
     x > o.x - margin && x < o.x + o.w + margin &&
@@ -45,16 +40,16 @@ function isInObstacle(x, y, mapData, margin = 40) {
   );
 }
 
-// Zoek een veilige spawnplek
-function findSafeSpawn(mapData) {
+// Helper: Veilige spawnplek (Nu met dynamische map grootte)
+function findSafeSpawn(mapData, mapSize) {
   let attempts = 0;
   while (attempts < 100) {
-    const x = Math.random() * (MAP_WIDTH - 200) + 100;
-    const y = Math.random() * (MAP_HEIGHT - 200) + 100;
+    const x = Math.random() * (mapSize.w - 200) + 100;
+    const y = Math.random() * (mapSize.h - 200) + 100;
     if (!isInObstacle(x, y, mapData)) return { x, y };
     attempts++;
   }
-  return { x: 1200, y: 900 }; // Fallback
+  return { x: mapSize.w / 2, y: mapSize.h / 2 }; 
 }
 
 export default function App() {
@@ -71,20 +66,30 @@ export default function App() {
   const [isWorkshopOpen, setIsWorkshopOpen] = useState(false);
   const [workshopMaps, setWorkshopMaps] = useState([]);
 
-  // Map Editor State
+  // Map Editor & Sync State
+  const [mapSize, setMapSize] = useState(() => {
+    const saved = localStorage.getItem('customMapSize');
+    return saved ? JSON.parse(saved) : { w: 2400, h: 1800 };
+  });
   const [activeMap, setActiveMap] = useState(() => {
     const saved = localStorage.getItem('customMap');
     return saved ? JSON.parse(saved) : DEFAULT_OBSTACLES;
   });
+  
+  // Builder Extra's
+  const [history, setHistory] = useState([]);
+  const [snapToGrid, setSnapToGrid] = useState(true);
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawStart, setDrawStart] = useState({x: 0, y: 0});
   const [drawCurrent, setDrawCurrent] = useState({x: 0, y: 0});
 
-  // Refs voor game state en input (zorgt voor vloeiende framerate zonder React re-renders)
+  // Refs voor prestaties in loops
   const gameStateRef = useRef(gameState);
   const activeMapRef = useRef(activeMap);
-  const lobbyDataRef = useRef(null); // Directe ref voor canvas om schokken tegen te gaan
+  const mapSizeRef = useRef(mapSize);
+  const lobbyDataRef = useRef(null); 
   const canvasRef = useRef(null);
+  
   const pos = useRef({ x: 1200, y: 900 });
   const vel = useRef({ x: 0, y: 0 });
   const mousePosScreen = useRef({ x: 0, y: 0 }); 
@@ -98,51 +103,69 @@ export default function App() {
 
   useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
   useEffect(() => { activeMapRef.current = activeMap; }, [activeMap]);
+  useEffect(() => { mapSizeRef.current = mapSize; }, [mapSize]);
 
-  // 1. Socket Verbinding
+  // 1. Socket Verbinding & Event Listeners
   useEffect(() => {
     const s = io(SERVER_URL);
     setSocket(s);
 
-    // Workshop Listeners
     s.on('workshopList', (maps) => setWorkshopMaps(maps));
     s.on('mapLoaded', (mapData) => {
         if (mapData) {
-            setActiveMap(mapData);
-            localStorage.setItem('customMap', JSON.stringify(mapData));
+            // Als de server mapData doorgeeft met mapSize property
+            if (mapData.mapSize) setMapSize(mapData.mapSize);
+            const obstacles = mapData.mapData || mapData; 
+            setActiveMap(obstacles);
+            localStorage.setItem('customMap', JSON.stringify(obstacles));
             setIsWorkshopOpen(false);
             alert("Map uit workshop succesvol ingeladen!");
         }
     });
+    
     s.on('uploadSuccess', () => {
         alert("Je map is succesvol geüpload naar de server!");
         s.emit('getWorkshop');
     });
 
     s.on('lobbyUpdate', (data) => {
-      setLobbyData(data); // Voor UI (Scoreboard)
-      lobbyDataRef.current = data; // Voor vloeiende Canvas rendering
+      setLobbyData(data); 
+      lobbyDataRef.current = data; 
       
-      // Check Winnaar (Zodra iemand 5 kills heeft)
+      // SYNC MAP (Voor clients die niet de host zijn)
+      if (data.customMap && data.customMap.length > 0 && gameStateRef.current === 'LOBBY') {
+         if (JSON.stringify(data.customMap) !== JSON.stringify(activeMapRef.current)) {
+             setActiveMap(data.customMap);
+             if (data.mapSize) setMapSize(data.mapSize);
+         }
+      }
+
+      // Check Winnaar
       const winningPlayerId = Object.keys(data.players || {}).find(id => data.players[id].score >= WIN_SCORE);
-      if (winningPlayerId || data.winner) {
+      if ((winningPlayerId || data.winner) && gameStateRef.current !== 'WINNER') {
           const wName = data.winner || data.players[winningPlayerId].name;
           setWinnerName(wName);
           setGameState('WINNER');
-          return; // Stop verdere verwerking
+          if (deathIntervalRef.current) clearInterval(deathIntervalRef.current);
+          return; 
       }
 
-      // START SPEL LOGICA
+      // Terug naar lobby via server reset (bijv. als host op "Terug naar Lobby" klikt)
+      if (data.status === 'LOBBY' && gameStateRef.current === 'WINNER') {
+          setGameState('LOBBY');
+          setWinnerName('');
+      }
+
+      // SPEL LOGICA
       if (data.status === 'PLAYING' && gameStateRef.current !== 'WINNER') {
-        
-        // Initiele Spawn
+        // Initiele Spawn vanuit Lobby
         if (gameStateRef.current === 'LOBBY') {
           const myData = data.players[s.id];
-          let startX = myData ? myData.x : 1200;
-          let startY = myData ? myData.y : 900;
+          let startX = myData ? myData.x : mapSizeRef.current.w / 2;
+          let startY = myData ? myData.y : mapSizeRef.current.h / 2;
 
           if (isInObstacle(startX, startY, activeMapRef.current)) {
-             const safe = findSafeSpawn(activeMapRef.current);
+             const safe = findSafeSpawn(activeMapRef.current, mapSizeRef.current);
              startX = safe.x;
              startY = safe.y;
              s.emit('move', { x: startX, y: startY });
@@ -153,10 +176,10 @@ export default function App() {
           setGameState('PLAYING');
         }
 
-        // Check voor eliminatie
+        // Check voor eliminatie (Stuck-in-dead bugfix: buffer naar 3500ms)
         const myData = data.players[s.id];
         if (gameStateRef.current === 'PLAYING' && myData?.alive === false) {
-          if (Date.now() - lastRespawnTime.current > 2000) {
+          if (Date.now() - lastRespawnTime.current > 3500) {
             startDeathSequence(s);
           }
         }
@@ -174,7 +197,7 @@ export default function App() {
     };
   }, []); 
 
-  // 2. Game Loop & Editor Loop
+  // 2. Render Loop
   useEffect(() => {
     if (gameState === 'MENU' || gameState === 'LOBBY' || gameState === 'WINNER') return;
 
@@ -183,7 +206,7 @@ export default function App() {
         updatePhysics();
         drawGame();
       } else if (gameStateRef.current === 'DEAD') {
-        drawGame(); // Blijf de achtergrond tekenen als je dood bent
+        drawGame(); 
       } else if (gameStateRef.current === 'EDITOR') {
         updateEditorPhysics();
         drawEditor();
@@ -193,10 +216,11 @@ export default function App() {
 
     frameRef.current = requestAnimationFrame(render);
     return () => cancelAnimationFrame(frameRef.current);
-  }, [gameState, screenSize, activeMap]);
+  }, [gameState, screenSize, activeMap, mapSize]);
 
+  // BUGFIX: Veiligere death sequence
   const startDeathSequence = (currentSocket) => {
-    if (gameStateRef.current === 'DEAD') return;
+    if (gameStateRef.current === 'DEAD' || gameStateRef.current === 'WINNER') return;
     setGameState('DEAD');
     setDeathTimer(5);
     
@@ -207,12 +231,20 @@ export default function App() {
         if (prev <= 1) {
           clearInterval(deathIntervalRef.current);
           
-          const safe = findSafeSpawn(activeMapRef.current);
+          const safe = findSafeSpawn(activeMapRef.current, mapSizeRef.current);
           pos.current = safe;
+          vel.current = { x: 0, y: 0 };
+          
           currentSocket.emit('move', safe);
           currentSocket.emit('respawn');
           
           lastRespawnTime.current = Date.now();
+          
+          // Optimistische update om te voorkomen dat de client direct weer sterft
+          if (lobbyDataRef.current && lobbyDataRef.current.players[currentSocket.id]) {
+              lobbyDataRef.current.players[currentSocket.id].alive = true;
+          }
+
           setGameState('PLAYING');
           return 0;
         }
@@ -281,10 +313,11 @@ export default function App() {
     let nextY = pos.current.y + vel.current.y;
     const r = 20;
 
-    if (nextX < r) nextX = r; if (nextX > MAP_WIDTH - r) nextX = MAP_WIDTH - r;
-    if (nextY < r) nextY = r; if (nextY > MAP_HEIGHT - r) nextY = MAP_HEIGHT - r;
+    // Map grenzen
+    if (nextX < r) nextX = r; if (nextX > mapSizeRef.current.w - r) nextX = mapSizeRef.current.w - r;
+    if (nextY < r) nextY = r; if (nextY > mapSizeRef.current.h - r) nextY = mapSizeRef.current.h - r;
 
-    // Botsen met actieve map
+    // Obstakels
     if (!isInObstacle(nextX, pos.current.y, activeMapRef.current, r)) {
         pos.current.x = nextX;
     } else {
@@ -315,13 +348,17 @@ export default function App() {
     ctx.save();
     ctx.translate(-camX, -camY);
 
-    // Raster
+    // Raster & Wereld grenzen
     ctx.strokeStyle = '#1e293b';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    for (let x = 0; x <= MAP_WIDTH; x += 100) { ctx.moveTo(x, 0); ctx.lineTo(x, MAP_HEIGHT); }
-    for (let y = 0; y <= MAP_HEIGHT; y += 100) { ctx.moveTo(0, y); ctx.lineTo(MAP_WIDTH, y); }
+    for (let x = 0; x <= mapSizeRef.current.w; x += 100) { ctx.moveTo(x, 0); ctx.lineTo(x, mapSizeRef.current.h); }
+    for (let y = 0; y <= mapSizeRef.current.h; y += 100) { ctx.moveTo(0, y); ctx.lineTo(mapSizeRef.current.w, y); }
     ctx.stroke();
+    
+    ctx.strokeStyle = '#334155';
+    ctx.lineWidth = 10;
+    ctx.strokeRect(0, 0, mapSizeRef.current.w, mapSizeRef.current.h);
 
     // Actieve Map Obstakels
     ctx.fillStyle = '#334155';
@@ -332,7 +369,7 @@ export default function App() {
       ctx.strokeRect(o.x, o.y, o.w, o.h);
     });
 
-    // Kogels (via lobbyDataRef voor minder schokken)
+    // Kogels
     ctx.fillStyle = '#fbbf24';
     ctx.shadowBlur = 10;
     ctx.shadowColor = '#fbbf24';
@@ -409,8 +446,8 @@ export default function App() {
 
     // Minimap
     const mmScale = 0.08;
-    const mmW = MAP_WIDTH * mmScale;
-    const mmH = MAP_HEIGHT * mmScale;
+    const mmW = mapSizeRef.current.w * mmScale;
+    const mmH = mapSizeRef.current.h * mmScale;
     const mmX = screenSize.w - mmW - 20;
     const mmY = 20;
     ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
@@ -430,7 +467,7 @@ export default function App() {
     });
   };
 
-  // --- MAP EDITOR LOGICA ---
+  // --- MAP EDITOR LOGICA (GEAVANCEERD) ---
   const updateEditorPhysics = () => {
     const speed = 15;
     if (keysPressed.current['w']) editorCam.current.y -= speed;
@@ -438,8 +475,8 @@ export default function App() {
     if (keysPressed.current['a']) editorCam.current.x -= speed;
     if (keysPressed.current['d']) editorCam.current.x += speed;
 
-    editorCam.current.x = Math.max(0, Math.min(MAP_WIDTH - screenSize.w, editorCam.current.x));
-    editorCam.current.y = Math.max(0, Math.min(MAP_HEIGHT - screenSize.h, editorCam.current.y));
+    editorCam.current.x = Math.max(0, Math.min(mapSizeRef.current.w - screenSize.w + 100, editorCam.current.x));
+    editorCam.current.y = Math.max(0, Math.min(mapSizeRef.current.h - screenSize.h + 100, editorCam.current.y));
   };
 
   const drawEditor = () => {
@@ -453,18 +490,19 @@ export default function App() {
     ctx.save();
     ctx.translate(-editorCam.current.x, -editorCam.current.y);
 
-    // Raster
-    ctx.strokeStyle = '#1e293b';
-    ctx.lineWidth = 2;
+    // Grid (Dikke lijnen als snapping aan staat)
+    ctx.strokeStyle = snapToGrid ? '#334155' : '#1e293b';
+    ctx.lineWidth = snapToGrid ? 2 : 1;
+    const step = snapToGrid ? 50 : 100;
     ctx.beginPath();
-    for (let x = 0; x <= MAP_WIDTH; x += 100) { ctx.moveTo(x, 0); ctx.lineTo(x, MAP_HEIGHT); }
-    for (let y = 0; y <= MAP_HEIGHT; y += 100) { ctx.moveTo(0, y); ctx.lineTo(MAP_WIDTH, y); }
+    for (let x = 0; x <= mapSizeRef.current.w; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, mapSizeRef.current.h); }
+    for (let y = 0; y <= mapSizeRef.current.h; y += step) { ctx.moveTo(0, y); ctx.lineTo(mapSizeRef.current.w, y); }
     ctx.stroke();
 
     // Map grenzen
     ctx.strokeStyle = '#ef4444';
-    ctx.lineWidth = 4;
-    ctx.strokeRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+    ctx.lineWidth = 6;
+    ctx.strokeRect(0, 0, mapSizeRef.current.w, mapSizeRef.current.h);
 
     // Huidige Blokken
     ctx.fillStyle = '#334155';
@@ -475,16 +513,23 @@ export default function App() {
       ctx.strokeRect(o.x, o.y, o.w, o.h);
     });
 
-    // Teken nieuw blok
+    // Teken nieuw blok met afmetingen preview
     if (isDrawing) {
-      ctx.fillStyle = 'rgba(16, 185, 129, 0.5)';
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.4)';
       ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 2;
       const x = Math.min(drawStart.x, drawCurrent.x);
       const y = Math.min(drawStart.y, drawCurrent.y);
       const w = Math.abs(drawCurrent.x - drawStart.x);
       const h = Math.abs(drawCurrent.y - drawStart.y);
       ctx.fillRect(x, y, w, h);
       ctx.strokeRect(x, y, w, h);
+      
+      // Tekst met afmetingen
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 16px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`${w} x ${h}`, x + w/2, y + h/2 + 6);
     }
     
     ctx.restore();
@@ -493,13 +538,22 @@ export default function App() {
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
     ctx.font = '14px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText("WASD = Camera bewegen  |  Muis Ingedrukt = Blok Tekenen", screenSize.w / 2, screenSize.h - 30);
+    ctx.fillText("WASD = Camera  |  Muis = Blok Tekenen", screenSize.w / 2, screenSize.h - 30);
+  };
+
+  const getSnappedCoords = (e) => {
+    let x = e.clientX + editorCam.current.x;
+    let y = e.clientY + editorCam.current.y;
+    if (snapToGrid) {
+      x = Math.round(x / 50) * 50;
+      y = Math.round(y / 50) * 50;
+    }
+    return { x, y };
   };
 
   const handleEditorMouseDown = (e) => {
     if (gameState !== 'EDITOR') return;
-    const x = e.clientX + editorCam.current.x;
-    const y = e.clientY + editorCam.current.y;
+    const { x, y } = getSnappedCoords(e);
     setDrawStart({x, y});
     setDrawCurrent({x, y});
     setIsDrawing(true);
@@ -511,10 +565,7 @@ export default function App() {
       return;
     }
     if (isDrawing) {
-      setDrawCurrent({
-        x: e.clientX + editorCam.current.x,
-        y: e.clientY + editorCam.current.y
-      });
+      setDrawCurrent(getSnappedCoords(e));
     }
   };
 
@@ -527,21 +578,31 @@ export default function App() {
     const w = Math.abs(drawCurrent.x - drawStart.x);
     const h = Math.abs(drawCurrent.y - drawStart.y);
     
-    // Voeg alleen toe als het blokje groot genoeg is
-    if (w > 20 && h > 20) {
+    // Voeg toe als het blok groot genoeg is
+    if (w >= 20 && h >= 20) {
+      setHistory(prev => [...prev, activeMap]); // Sla geschiedenis op voor Undo
       setActiveMap(prev => [...prev, {x, y, w, h}]);
+    }
+  };
+
+  const undoLastBlock = () => {
+    if (history.length > 0) {
+      setActiveMap(history[history.length - 1]);
+      setHistory(prev => prev.slice(0, -1));
     }
   };
 
   const saveEditorMap = () => {
     localStorage.setItem('customMap', JSON.stringify(activeMap));
+    localStorage.setItem('customMapSize', JSON.stringify(mapSize));
     setGameState('MENU');
   };
 
   const exportMapCode = () => {
-    const code = btoa(JSON.stringify(activeMap));
+    const payload = { mapSize, mapData: activeMap };
+    const code = btoa(JSON.stringify(payload));
     navigator.clipboard.writeText(code);
-    alert('Map Code gekopieerd naar je klembord! Deel deze met je vrienden.');
+    alert('Map Code gekopieerd! Deel deze met je vrienden.');
   };
 
   const importMapCode = () => {
@@ -549,8 +610,15 @@ export default function App() {
     if (code) {
       try {
         const decoded = JSON.parse(atob(code));
-        setActiveMap(decoded);
-        localStorage.setItem('customMap', JSON.stringify(decoded));
+        // Backwards compatibility check
+        if (Array.isArray(decoded)) {
+            setActiveMap(decoded);
+            setMapSize({w: 2400, h: 1800}); // Default size
+        } else {
+            setActiveMap(decoded.mapData);
+            setMapSize(decoded.mapSize);
+        }
+        localStorage.setItem('customMap', JSON.stringify(activeMap));
       } catch(e) {
         alert('Ongeldige Map Code!');
       }
@@ -573,20 +641,19 @@ export default function App() {
       const name = prompt("Hoe wil je deze map noemen?");
       if (!name) return;
       
-      let pName = playerName || prompt("Wat is jouw naam (zodat mensen weten wie hem gemaakt heeft)?");
+      let pName = playerName || prompt("Wat is jouw naam (maker)?");
       if (!pName) return;
+      if (!playerName) setPlayerName(pName); 
       
-      if (!playerName) setPlayerName(pName); // Sla de naam op als die nog niet bekend was
-      
-      socket.emit('uploadMap', { name, creator: pName, mapData: activeMap });
+      socket.emit('uploadMap', { name, creator: pName, mapData: activeMap, mapSize });
   };
 
 
   // --- MENU & LOBBY FUNCTIES ---
   const join = () => {
     if (!playerName || !lobbyCode || !socket) return;
-    // Stuur de custom map mee naar de server!
-    socket.emit('joinLobby', { lobbyCode: lobbyCode.toUpperCase(), playerName, customMap: activeMap });
+    // Host stuurt zijn map en size naar de server!
+    socket.emit('joinLobby', { lobbyCode: lobbyCode.toUpperCase(), playerName, customMap: activeMap, mapSize: mapSize });
     setGameState('LOBBY');
   };
 
@@ -594,11 +661,17 @@ export default function App() {
     socket.emit('startMatch');
   };
 
+  const returnToLobbyFromWin = () => {
+    setGameState('LOBBY');
+    setWinnerName('');
+    if (socket) socket.emit('returnToLobby');
+  };
+
   // --- UI SCHERMEN ---
 
   if (isWorkshopOpen) return (
     <div className="fixed inset-0 bg-slate-950 text-white p-6 overflow-y-auto z-[300] font-sans">
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-5xl mx-auto">
         <div className="flex justify-between items-center mb-10 mt-6">
           <div>
             <h2 className="text-5xl font-black italic text-emerald-400 tracking-tighter">PI WORKSHOP</h2>
@@ -613,38 +686,57 @@ export default function App() {
           {workshopMaps.length === 0 && (
             <div className="col-span-full bg-slate-900 p-10 rounded-[2.5rem] border-2 border-slate-800 text-center">
               <Globe size={48} className="mx-auto text-slate-600 mb-4" />
-              <p className="text-slate-400 font-bold text-xl">Geen mappen gevonden op de server...</p>
-              <p className="text-slate-500">Bouw een map in de editor en upload hem!</p>
+              <p className="text-slate-400 font-bold text-xl">Geen mappen gevonden...</p>
+              <p className="text-slate-500">Bouw de eerste map in de editor en upload hem!</p>
             </div>
           )}
           
-          {workshopMaps.map(m => (
-            <div key={m.id} className="bg-slate-900 border-2 border-slate-800 p-6 rounded-[2.5rem] flex flex-col gap-4 hover:border-emerald-500/50 transition-colors">
-              <div className="flex justify-between items-start">
-                <div>
-                  <h3 className="text-2xl font-black text-white uppercase">{m.name}</h3>
-                  <p className="text-emerald-500 flex items-center gap-2 font-bold mt-1 text-sm"><User size={16}/> Door: {m.creator}</p>
+          {workshopMaps.map(m => {
+            // Bereken de preview layout op basis van de server map
+            const wSize = m.mapSize?.w || 2400;
+            const hSize = m.mapSize?.h || 1800;
+            const wData = m.mapData || [];
+            
+            return (
+              <div key={m.id} className="bg-slate-900 border-2 border-slate-800 p-6 rounded-[2.5rem] flex flex-col gap-4 hover:border-emerald-500/50 transition-colors">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <h3 className="text-2xl font-black text-white uppercase">{m.name}</h3>
+                    <p className="text-emerald-500 flex items-center gap-2 font-bold mt-1 text-sm"><User size={16}/> Door: {m.creator}</p>
+                  </div>
+                  <button 
+                    onClick={() => socket.emit('likeMap', m.id)} 
+                    className="flex items-center gap-1 text-rose-500 font-bold bg-rose-500/10 hover:bg-rose-500/20 px-3 py-1 rounded-full transition-colors"
+                  >
+                    <Heart size={16} fill="currentColor"/> {m.likes || 0}
+                  </button>
                 </div>
+                
+                {/* Dynamische Map Preview (SVG) */}
+                <div className="w-full h-40 bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 p-2">
+                   <svg viewBox={`0 0 ${wSize} ${hSize}`} className="w-full h-full opacity-80" preserveAspectRatio="xMidYMid meet">
+                      {/* Achtergrond raster preview */}
+                      <rect width="100%" height="100%" fill="#0f172a" />
+                      {wData.map((obs, i) => (
+                          <rect key={i} x={obs.x} y={obs.y} width={obs.w} height={obs.h} fill="#334155" stroke="#64748b" strokeWidth="15" />
+                      ))}
+                   </svg>
+                </div>
+
+                <div className="flex justify-between items-center bg-slate-950 rounded-xl p-3 border border-slate-800">
+                  <span className="text-slate-400 text-xs font-bold tracking-widest uppercase">{wData.length} obstakels</span>
+                  <span className="text-slate-400 text-xs font-bold tracking-widest uppercase">{wSize}x{hSize} px</span>
+                </div>
+
                 <button 
-                  onClick={() => socket.emit('likeMap', m.id)} 
-                  className="flex items-center gap-1 text-rose-500 font-bold bg-rose-500/10 hover:bg-rose-500/20 px-3 py-1 rounded-full transition-colors"
+                  onClick={() => socket.emit('loadMapDetails', m.id)}
+                  className="w-full bg-emerald-500 text-slate-900 font-black py-4 rounded-2xl uppercase hover:scale-[1.02] active:scale-[0.98] transition-transform shadow-[0_4px_0_rgb(16,185,129)] active:shadow-none active:translate-y-1 mt-2"
                 >
-                  <Heart size={16} fill="currentColor"/> {m.likes || 0}
+                  Laad deze Map
                 </button>
               </div>
-              
-              <div className="mt-2 text-slate-400 text-xs uppercase font-bold tracking-widest bg-slate-950 rounded-xl p-3 border border-slate-800">
-                Bevat {m.mapData?.length || 0} obstakels
-              </div>
-
-              <button 
-                onClick={() => socket.emit('loadMapDetails', m.id)}
-                className="w-full bg-emerald-500 text-slate-900 font-black py-4 rounded-2xl uppercase hover:scale-[1.02] active:scale-[0.98] transition-transform shadow-[0_4px_0_rgb(16,185,129)] active:shadow-none active:translate-y-1 mt-2"
-              >
-                Laad deze Map
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
@@ -661,7 +753,7 @@ export default function App() {
         
         <div className="border-t border-slate-800 pt-6 mt-2 flex flex-col gap-3">
           <button onClick={() => setGameState('EDITOR')} className="w-full bg-slate-800 py-4 rounded-2xl font-bold text-slate-300 hover:bg-slate-700 flex justify-center items-center gap-2 transition-colors">
-            <MapIcon size={18} /> Map Editor
+            <MapIcon size={18} /> Map Builder
           </button>
           
           <button onClick={openWorkshop} className="w-full bg-blue-600 py-4 rounded-2xl font-bold text-slate-100 hover:bg-blue-500 flex justify-center items-center gap-2 transition-colors">
@@ -683,6 +775,10 @@ export default function App() {
             <h2 className="text-2xl font-bold text-slate-400 uppercase tracking-wide">Lobby: {lobbyCode}</h2>
             <div className="bg-emerald-500/10 text-emerald-400 px-3 py-1 rounded-full text-xs font-bold">Doel: {WIN_SCORE}</div>
         </div>
+        <div className="bg-slate-950/50 rounded-xl p-3 mb-6 border border-slate-800 flex justify-between items-center">
+            <span className="text-xs font-bold text-slate-400 uppercase">Gekozen Map Grootte</span>
+            <span className="text-xs font-bold text-emerald-400">{mapSize.w}x{mapSize.h}</span>
+        </div>
         <div className="space-y-3 mb-10 max-h-60 overflow-y-auto">
           {Object.values(lobbyData?.players || {}).map((p, i) => (
             <div key={i} className="bg-slate-800 p-4 rounded-2xl border border-slate-700 flex justify-between font-bold items-center">
@@ -702,25 +798,52 @@ export default function App() {
             <Trophy size={100} className="text-yellow-400 mx-auto mb-6 animate-bounce" />
             <h1 className="text-6xl font-black mb-4 uppercase text-yellow-400 tracking-tighter">Winnaar!</h1>
             <p className="text-4xl font-bold mb-10 text-white">{winnerName}</p>
-            <button onClick={() => window.location.reload()} className="bg-white text-slate-900 px-10 py-5 rounded-full font-black uppercase hover:bg-emerald-400 transition-colors shadow-lg">Terug naar Menu</button>
+            {/* Keert terug naar lobby in plaats van page reload */}
+            <button onClick={returnToLobbyFromWin} className="bg-white text-slate-900 px-10 py-5 rounded-full font-black uppercase hover:bg-emerald-400 transition-colors shadow-lg">Terug naar Lobby</button>
         </div>
     </div>
   );
 
   return (
-    <div className="fixed inset-0 bg-black overflow-hidden cursor-none">
+    // Zichtbare cursor in de editor en menu's. Onzichtbaar in de game.
+    <div className={`fixed inset-0 bg-black overflow-hidden ${gameState === 'EDITOR' ? 'cursor-default' : 'cursor-none'}`}>
       
       {/* HUD OVERLAY VOOR EDITOR */}
       {gameState === 'EDITOR' && (
-        <div className="absolute top-4 left-4 z-50 flex gap-4 cursor-default">
-           <button onClick={saveEditorMap} className="bg-emerald-500 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-emerald-400 shadow-lg"><Save size={18}/> Opslaan & Terug</button>
-           <button onClick={() => setActiveMap([])} className="bg-rose-500 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-rose-400 shadow-lg"><Trash2 size={18}/> Wis Alles</button>
-           <button onClick={exportMapCode} className="bg-slate-700 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-slate-600 shadow-lg"><Upload size={18}/> Kopieer Map Code</button>
+        <div className="absolute top-4 left-4 z-50 flex flex-col gap-3 cursor-default">
+           <div className="flex gap-2">
+               <button onClick={saveEditorMap} className="bg-emerald-500 text-white px-5 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-emerald-400 shadow-lg"><Save size={18}/> Opslaan & Terug</button>
+               <button onClick={uploadMapToServer} className="bg-purple-600 text-white px-5 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-purple-500 shadow-lg"><CloudUpload size={18}/> Uploaden</button>
+               <button onClick={exportMapCode} className="bg-slate-700 text-white px-5 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-slate-600 shadow-lg"><Upload size={18}/> Code</button>
+           </div>
            
-           {/* NIEUWE KNOP: Direct uploaden naar je server/Pi! */}
-           <button onClick={uploadMapToServer} className="bg-purple-600 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-purple-500 shadow-lg">
-              <CloudUpload size={18}/> Upload naar Server
-           </button>
+           <div className="flex gap-2 bg-slate-900/80 p-2 rounded-xl border border-slate-700 backdrop-blur">
+               <div className="flex items-center gap-2 bg-slate-800 px-3 py-2 rounded-lg text-sm font-bold text-white">
+                   <Maximize size={16} className="text-emerald-400"/> Map:
+                   <select 
+                      className="bg-transparent outline-none text-emerald-400 cursor-pointer ml-1"
+                      value={`${mapSize.w}x${mapSize.h}`}
+                      onChange={(e) => {
+                          const [w, h] = e.target.value.split('x').map(Number);
+                          setMapSize({w, h});
+                      }}
+                   >
+                       <option value="1600x1200">Klein (1600x1200)</option>
+                       <option value="2400x1800">Medium (2400x1800)</option>
+                       <option value="3200x2400">Groot (3200x2400)</option>
+                   </select>
+               </div>
+
+               <button 
+                  onClick={() => setSnapToGrid(!snapToGrid)} 
+                  className={`px-4 py-2 rounded-lg font-bold flex items-center gap-2 text-sm transition-colors ${snapToGrid ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'}`}
+               >
+                  <Grid size={16}/> Snap {snapToGrid ? 'AAN' : 'UIT'}
+               </button>
+
+               <button onClick={undoLastBlock} disabled={history.length === 0} className="bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-slate-700"><Undo size={16}/> Undo</button>
+               <button onClick={() => { setHistory(prev => [...prev, activeMap]); setActiveMap([]); }} className="bg-rose-500/20 text-rose-500 hover:bg-rose-500 hover:text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors"><Trash2 size={16}/> Wis</button>
+           </div>
         </div>
       )}
 
@@ -764,7 +887,7 @@ export default function App() {
 
       {/* IN-GAME CONTROLS HINT */}
       {gameState === 'PLAYING' && (
-        <div className="absolute bottom-4 left-4 text-white/50 font-sans text-xs pointer-events-none">
+        <div className="absolute bottom-4 left-4 text-white/50 font-sans text-xs pointer-events-none font-bold tracking-widest uppercase">
           KLIK = Schieten | SHIFT = Dash
         </div>
       )}
