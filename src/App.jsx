@@ -3,7 +3,7 @@ import { io } from 'socket.io-client';
 import { Skull, Crosshair, Trophy, Play, Map as MapIcon, Save, Trash2, ArrowLeft, Download, Upload } from 'lucide-react';
 
 // --- CONFIGURATIE ---
-const SERVER_URL = ""; // zet hier je tunnel-URL of laat leeg voor window.location.origin
+const SERVER_URL = "https://determination-alberta-specific-childrens.trycloudflare.com"; // zet hier je tunnel-URL of laat leeg voor window.location.origin
 
 // --- GAME BALANS ---
 const ACCELERATION = 0.4;
