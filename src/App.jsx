@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
-import { Skull, Crosshair, Trophy, Play, Map as MapIcon, Save, Trash2, ArrowLeft, Download, Upload } from 'lucide-react';
+import { 
+  Skull, Crosshair, Trophy, Play, Map as MapIcon, Save, 
+  Trash2, ArrowLeft, Download, Upload, Globe, Heart, 
+  User, ChevronLeft, CloudUpload 
+} from 'lucide-react';
 
 // --- CONFIGURATIE ---
 const SERVER_URL = "https://determination-alberta-specific-childrens.trycloudflare.com";
@@ -63,6 +67,10 @@ export default function App() {
   const [deathTimer, setDeathTimer] = useState(0);
   const [winnerName, setWinnerName] = useState('');
 
+  // Workshop State
+  const [isWorkshopOpen, setIsWorkshopOpen] = useState(false);
+  const [workshopMaps, setWorkshopMaps] = useState([]);
+
   // Map Editor State
   const [activeMap, setActiveMap] = useState(() => {
     const saved = localStorage.getItem('customMap');
@@ -95,6 +103,21 @@ export default function App() {
   useEffect(() => {
     const s = io(SERVER_URL);
     setSocket(s);
+
+    // Workshop Listeners
+    s.on('workshopList', (maps) => setWorkshopMaps(maps));
+    s.on('mapLoaded', (mapData) => {
+        if (mapData) {
+            setActiveMap(mapData);
+            localStorage.setItem('customMap', JSON.stringify(mapData));
+            setIsWorkshopOpen(false);
+            alert("Map uit workshop succesvol ingeladen!");
+        }
+    });
+    s.on('uploadSuccess', () => {
+        alert("Je map is succesvol geüpload naar de server!");
+        s.emit('getWorkshop');
+    });
 
     s.on('lobbyUpdate', (data) => {
       setLobbyData(data); // Voor UI (Scoreboard)
@@ -534,6 +557,31 @@ export default function App() {
     }
   };
 
+  // --- WORKSHOP FUNCTIES ---
+  const openWorkshop = () => {
+      if (socket) {
+          socket.emit('getWorkshop');
+          setIsWorkshopOpen(true);
+      } else {
+          alert("Verbinden met de server...");
+      }
+  };
+
+  const uploadMapToServer = () => {
+      if (!socket) return alert("Geen verbinding met de server!");
+      
+      const name = prompt("Hoe wil je deze map noemen?");
+      if (!name) return;
+      
+      let pName = playerName || prompt("Wat is jouw naam (zodat mensen weten wie hem gemaakt heeft)?");
+      if (!pName) return;
+      
+      if (!playerName) setPlayerName(pName); // Sla de naam op als die nog niet bekend was
+      
+      socket.emit('uploadMap', { name, creator: pName, mapData: activeMap });
+  };
+
+
   // --- MENU & LOBBY FUNCTIES ---
   const join = () => {
     if (!playerName || !lobbyCode || !socket) return;
@@ -546,9 +594,65 @@ export default function App() {
     socket.emit('startMatch');
   };
 
+  // --- UI SCHERMEN ---
+
+  if (isWorkshopOpen) return (
+    <div className="fixed inset-0 bg-slate-950 text-white p-6 overflow-y-auto z-[300] font-sans">
+      <div className="max-w-4xl mx-auto">
+        <div className="flex justify-between items-center mb-10 mt-6">
+          <div>
+            <h2 className="text-5xl font-black italic text-emerald-400 tracking-tighter">PI WORKSHOP</h2>
+            <p className="text-slate-500 font-bold uppercase tracking-widest text-sm">Door de community gebouwde mappen</p>
+          </div>
+          <button onClick={() => setIsWorkshopOpen(false)} className="bg-slate-800 p-4 rounded-2xl hover:bg-rose-500 transition-colors">
+            <ChevronLeft size={32}/>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-20">
+          {workshopMaps.length === 0 && (
+            <div className="col-span-full bg-slate-900 p-10 rounded-[2.5rem] border-2 border-slate-800 text-center">
+              <Globe size={48} className="mx-auto text-slate-600 mb-4" />
+              <p className="text-slate-400 font-bold text-xl">Geen mappen gevonden op de server...</p>
+              <p className="text-slate-500">Bouw een map in de editor en upload hem!</p>
+            </div>
+          )}
+          
+          {workshopMaps.map(m => (
+            <div key={m.id} className="bg-slate-900 border-2 border-slate-800 p-6 rounded-[2.5rem] flex flex-col gap-4 hover:border-emerald-500/50 transition-colors">
+              <div className="flex justify-between items-start">
+                <div>
+                  <h3 className="text-2xl font-black text-white uppercase">{m.name}</h3>
+                  <p className="text-emerald-500 flex items-center gap-2 font-bold mt-1 text-sm"><User size={16}/> Door: {m.creator}</p>
+                </div>
+                <button 
+                  onClick={() => socket.emit('likeMap', m.id)} 
+                  className="flex items-center gap-1 text-rose-500 font-bold bg-rose-500/10 hover:bg-rose-500/20 px-3 py-1 rounded-full transition-colors"
+                >
+                  <Heart size={16} fill="currentColor"/> {m.likes || 0}
+                </button>
+              </div>
+              
+              <div className="mt-2 text-slate-400 text-xs uppercase font-bold tracking-widest bg-slate-950 rounded-xl p-3 border border-slate-800">
+                Bevat {m.mapData?.length || 0} obstakels
+              </div>
+
+              <button 
+                onClick={() => socket.emit('loadMapDetails', m.id)}
+                className="w-full bg-emerald-500 text-slate-900 font-black py-4 rounded-2xl uppercase hover:scale-[1.02] active:scale-[0.98] transition-transform shadow-[0_4px_0_rgb(16,185,129)] active:shadow-none active:translate-y-1 mt-2"
+              >
+                Laad deze Map
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
   if (gameState === 'MENU') return (
     <div className="w-full h-screen bg-slate-950 flex items-center justify-center text-white font-sans overflow-hidden">
-      <div className="bg-slate-900 p-12 rounded-[3rem] shadow-2xl w-full max-w-sm border-b-8 border-emerald-500/20 text-center">
+      <div className="bg-slate-900 p-12 rounded-[3rem] shadow-2xl w-full max-w-sm border-b-8 border-emerald-500/20 text-center relative">
         <Crosshair size={60} className="text-emerald-400 mx-auto mb-6 animate-pulse" />
         <h1 className="text-5xl font-black mb-10 italic tracking-tighter">BOOM.IO</h1>
         <input className="w-full bg-slate-800 p-4 rounded-2xl mb-4 border border-slate-700 outline-none focus:border-emerald-500 text-white" placeholder="JOUW NAAM" value={playerName} onChange={e => setPlayerName(e.target.value)} />
@@ -559,8 +663,13 @@ export default function App() {
           <button onClick={() => setGameState('EDITOR')} className="w-full bg-slate-800 py-4 rounded-2xl font-bold text-slate-300 hover:bg-slate-700 flex justify-center items-center gap-2 transition-colors">
             <MapIcon size={18} /> Map Editor
           </button>
-          <button onClick={importMapCode} className="w-full bg-slate-800 py-3 rounded-2xl font-bold text-xs text-slate-400 hover:text-emerald-400 flex justify-center items-center gap-2 transition-colors">
-            <Download size={14} /> Importeer Map Code
+          
+          <button onClick={openWorkshop} className="w-full bg-blue-600 py-4 rounded-2xl font-bold text-slate-100 hover:bg-blue-500 flex justify-center items-center gap-2 transition-colors">
+            <Globe size={18} /> Community Workshop
+          </button>
+
+          <button onClick={importMapCode} className="w-full bg-slate-800 py-3 mt-2 rounded-2xl font-bold text-xs text-slate-400 hover:text-emerald-400 flex justify-center items-center gap-2 transition-colors">
+            <Download size={14} /> Importeer Map via Code
           </button>
         </div>
       </div>
@@ -606,7 +715,12 @@ export default function App() {
         <div className="absolute top-4 left-4 z-50 flex gap-4 cursor-default">
            <button onClick={saveEditorMap} className="bg-emerald-500 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-emerald-400 shadow-lg"><Save size={18}/> Opslaan & Terug</button>
            <button onClick={() => setActiveMap([])} className="bg-rose-500 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-rose-400 shadow-lg"><Trash2 size={18}/> Wis Alles</button>
-           <button onClick={exportMapCode} className="bg-blue-500 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-blue-400 shadow-lg"><Upload size={18}/> Kopieer Map Code</button>
+           <button onClick={exportMapCode} className="bg-slate-700 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-slate-600 shadow-lg"><Upload size={18}/> Kopieer Map Code</button>
+           
+           {/* NIEUWE KNOP: Direct uploaden naar je server/Pi! */}
+           <button onClick={uploadMapToServer} className="bg-purple-600 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-purple-500 shadow-lg">
+              <CloudUpload size={18}/> Upload naar Server
+           </button>
         </div>
       )}
 
