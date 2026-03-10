@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 
 // --- CONFIGURATIE ---
-const SERVER_URL = "https://determination-alberta-specific-childrens.trycloudflare.com";
+const SERVER_URL = "https://imagination-congress-belle-laboratory.trycloudflare.com";
 
 // --- GAME BALANS ---
 const ACCELERATION = 0.4; 
