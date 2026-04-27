@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 
 // --- CONFIGURATIE ---
-const SERVER_URL = "https://imagination-congress-belle-laboratory.trycloudflare.com";
+const SERVER_URL = "https://thin-exp-files-falling.trycloudflare.com";
 
 // --- GAME BALANS ---
 const ACCELERATION = 0.4; 
